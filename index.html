@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta
+      name="description"
+      content="Level Up — личный планировщик учебных и повседневных задач."
+    >
+    <title>Level Up — планировщик задач</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header">
+        <div class="site-header__bar">
+          <a class="brand" href="#top" aria-label="Level Up — на главную">
+            <span class="brand__mark" aria-hidden="true">LU</span>
+            <span>
+              <strong class="brand__name">Level Up</strong>
+              <span class="brand__tagline">Спокойный путь к большим целям</span>
+            </span>
+          </a>
+
+          <button
+            class="settings-button"
+            id="settings-button"
+            type="button"
+            aria-label="Открыть настройки"
+            aria-controls="settings-panel"
+            aria-expanded="false"
+            hidden
+          >
+            <span aria-hidden="true">⚙</span>
+          </button>
+
+          <aside
+            class="settings-panel"
+            id="settings-panel"
+            aria-labelledby="settings-title"
+            hidden
+          >
+            <h2 id="settings-title">Учебные предметы</h2>
+            <p>Здесь можно будет управлять списком предметов.</p>
+          </aside>
+        </div>
+      </header>
+
+      <main id="top">
+        <section
+          class="welcome-card"
+          id="welcome-panel"
+          aria-labelledby="welcome-title"
+        >
+          <div class="welcome-card__intro">
+            <p class="eyebrow">Добро пожаловать</p>
+            <h1 id="welcome-title">Как тебя называть?</h1>
+            <p class="welcome-card__text">
+              Имя сохранится только в этом браузере и появится в твоём профиле.
+            </p>
+          </div>
+
+          <form class="name-form" id="name-form" novalidate>
+            <div class="field">
+              <label for="name-input">Имя или никнейм</label>
+              <input
+                id="name-input"
+                name="name"
+                type="text"
+                autocomplete="nickname"
+                aria-describedby="name-hint name-error"
+                required
+              >
+              <p class="field__hint" id="name-hint">
+                Пробелы в начале и конце будут удалены.
+              </p>
+              <p class="field__error" id="name-error" role="alert" hidden></p>
+            </div>
+
+            <button class="primary-button" type="submit">Начать</button>
+          </form>
+        </section>
+
+        <div id="main-interface" hidden>
+          <section class="profile-card" aria-labelledby="profile-title">
+            <div class="profile-card__heading">
+              <div>
+                <p class="eyebrow">Твой профиль</p>
+                <h1 id="profile-title">
+                  Привет, <span id="profile-name"></span>!
+                </h1>
+              </div>
+              <div class="level-badge" aria-label="Текущий уровень">
+                Уровень <strong id="profile-level">1</strong>
+              </div>
+            </div>
+
+            <div class="profile-stats" aria-label="Прогресс пользователя">
+              <div class="stat-card">
+                <span class="stat-card__label">Всего XP</span>
+                <strong class="stat-card__value" id="profile-total-xp">0</strong>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__label">До нового уровня</span>
+                <strong class="stat-card__value">
+                  <span id="profile-xp-to-next">100</span> XP
+                </strong>
+              </div>
+            </div>
+
+            <div class="progress-block">
+              <div class="progress-block__labels">
+                <span>Прогресс уровня</span>
+                <strong id="profile-progress-text">0 из 100 XP</strong>
+              </div>
+              <progress
+                id="profile-progress"
+                max="100"
+                value="0"
+                aria-label="Прогресс текущего уровня"
+              >
+                0%
+              </progress>
+            </div>
+          </section>
+
+          <div class="dashboard-grid" aria-label="Основные разделы приложения">
+            <section class="panel" aria-labelledby="create-task-title">
+              <p class="eyebrow">Планирование</p>
+              <h2 id="create-task-title">Новая задача</h2>
+              <p class="empty-note">Форма создания задач появится здесь.</p>
+            </section>
+
+            <section class="panel" aria-labelledby="active-tasks-title">
+              <p class="eyebrow">В процессе</p>
+              <h2 id="active-tasks-title">Активные задачи</h2>
+              <p class="empty-note">Активных задач пока нет.</p>
+            </section>
+
+            <section class="panel panel--full" aria-labelledby="calendar-title">
+              <p class="eyebrow">Месяц</p>
+              <h2 id="calendar-title">Календарь</h2>
+              <p class="empty-note">Здесь появится обзор активных задач по дням.</p>
+            </section>
+
+            <section class="panel" aria-labelledby="filters-title">
+              <p class="eyebrow">Обзор</p>
+              <h2 id="filters-title">Фильтры</h2>
+              <p class="empty-note">Фильтры станут доступны вместе со списком задач.</p>
+            </section>
+
+            <section class="panel" aria-labelledby="completed-tasks-title">
+              <p class="eyebrow">Готово</p>
+              <h2 id="completed-tasks-title">Выполненные задачи</h2>
+              <p class="empty-note">Выполненных задач пока нет.</p>
+            </section>
+          </div>
+        </div>
+      </main>
+
+      <footer class="site-footer">
+        <p>Данные хранятся только в браузере на этом устройстве.</p>
+      </footer>
+    </div>
+  </body>
+</html>
