@@ -39,11 +39,39 @@
             class="settings-panel"
             id="settings-panel"
             aria-labelledby="settings-title"
-            hidden
-          >
-            <h2 id="settings-title">Учебные предметы</h2>
-            <p>Здесь можно будет управлять списком предметов.</p>
-          </aside>
+          hidden
+        >
+          <h2 id="settings-title">Учебные предметы</h2>
+          <p class="settings-panel__intro">
+            Добавь предмет, которого нет в базовом списке.
+          </p>
+
+          <form class="subject-form" id="subject-form" novalidate>
+            <div class="field">
+              <label for="subject-name-input">Новый предмет</label>
+              <input
+                id="subject-name-input"
+                name="subjectName"
+                type="text"
+                autocomplete="off"
+                aria-describedby="subject-name-error"
+                required
+              >
+              <p
+                class="field__error"
+                id="subject-name-error"
+                role="alert"
+                hidden
+              ></p>
+            </div>
+            <button class="secondary-button" type="submit">Добавить</button>
+          </form>
+
+          <div class="subjects-overview" aria-labelledby="subjects-list-title">
+            <h3 id="subjects-list-title">Доступные предметы</h3>
+            <ul class="subjects-list" id="subjects-list"></ul>
+          </div>
+        </aside>
         </div>
       </header>
 
@@ -129,13 +157,124 @@
             <section class="panel" aria-labelledby="create-task-title">
               <p class="eyebrow">Планирование</p>
               <h2 id="create-task-title">Новая задача</h2>
-              <p class="empty-note">Форма создания задач появится здесь.</p>
+
+              <form class="task-form" id="task-form" novalidate>
+                <div class="task-form__grid">
+                  <div class="field field--full">
+                    <label for="task-title-input">Название</label>
+                    <input
+                      id="task-title-input"
+                      name="title"
+                      type="text"
+                      aria-describedby="task-title-error"
+                      required
+                    >
+                    <p
+                      class="field__error"
+                      id="task-title-error"
+                      role="alert"
+                      hidden
+                    ></p>
+                  </div>
+
+                  <div class="field">
+                    <label for="task-direction-select">Направление</label>
+                    <select
+                      id="task-direction-select"
+                      name="direction"
+                      aria-describedby="task-direction-error"
+                      required
+                    >
+                      <option value="">Выберите направление</option>
+                      <option value="Школа">Школа</option>
+                      <option value="ЕГЭ">ЕГЭ</option>
+                      <option value="Олимпиада">Олимпиада</option>
+                      <option value="Курс">Курс</option>
+                      <option value="Поступление">Поступление</option>
+                      <option value="Личные дела">Личные дела</option>
+                    </select>
+                    <p
+                      class="field__error"
+                      id="task-direction-error"
+                      role="alert"
+                      hidden
+                    ></p>
+                  </div>
+
+                  <div class="field">
+                    <label for="task-subject-select">
+                      Предмет
+                      <span id="subject-required-marker" aria-hidden="true" hidden>*</span>
+                    </label>
+                    <select
+                      id="task-subject-select"
+                      name="subject"
+                      aria-describedby="task-subject-error"
+                      disabled
+                    >
+                      <option value="">Сначала направление</option>
+                    </select>
+                    <p
+                      class="field__error"
+                      id="task-subject-error"
+                      role="alert"
+                      hidden
+                    ></p>
+                  </div>
+
+                  <div class="field">
+                    <label for="task-difficulty-select">Сложность</label>
+                    <select
+                      id="task-difficulty-select"
+                      name="difficulty"
+                      aria-describedby="task-difficulty-error xp-preview"
+                      required
+                    >
+                      <option value="">Выберите сложность</option>
+                      <option value="easy">Простая</option>
+                      <option value="medium">Средняя</option>
+                      <option value="hard">Сложная</option>
+                    </select>
+                    <p class="xp-preview" id="xp-preview">Награда: — XP</p>
+                    <p
+                      class="field__error"
+                      id="task-difficulty-error"
+                      role="alert"
+                      hidden
+                    ></p>
+                  </div>
+
+                  <div class="field">
+                    <label for="task-deadline-input">Дедлайн</label>
+                    <input
+                      id="task-deadline-input"
+                      name="deadline"
+                      type="date"
+                      aria-describedby="task-deadline-error"
+                      required
+                    >
+                    <p
+                      class="field__error"
+                      id="task-deadline-error"
+                      role="alert"
+                      hidden
+                    ></p>
+                  </div>
+                </div>
+
+                <button class="primary-button" type="submit">
+                  Добавить задачу
+                </button>
+                <p class="form-status" id="task-form-status" role="status" hidden></p>
+              </form>
             </section>
 
             <section class="panel" aria-labelledby="active-tasks-title">
               <p class="eyebrow">В процессе</p>
               <h2 id="active-tasks-title">Активные задачи</h2>
-              <p class="empty-note">Активных задач пока нет.</p>
+              <p class="empty-note">
+                Карточки активных задач появятся здесь на следующем этапе.
+              </p>
             </section>
 
             <section class="panel panel--full" aria-labelledby="calendar-title">
