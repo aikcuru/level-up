@@ -515,10 +515,12 @@ progress::-webkit-progress-bar {
 
 progress::-webkit-progress-value {
   background: var(--color-caramel-roast);
+  transition: width 180ms ease;
 }
 
 progress::-moz-progress-bar {
   background: var(--color-caramel-roast);
+  transition: width 180ms ease;
 }
 
 .dashboard-grid {
@@ -770,7 +772,7 @@ progress::-moz-progress-bar {
   margin-top: 14px;
 }
 
-.task-card__edit-button {
+.task-card__action-button {
   min-height: 40px;
   padding: 8px 12px;
   border: 1px solid var(--color-mocha-bean);
@@ -780,19 +782,41 @@ progress::-moz-progress-bar {
   font-weight: 800;
 }
 
-.task-card__edit-button:hover {
+.task-card__action-button:hover {
   color: var(--color-creamy-latte);
   background: var(--color-mocha-bean);
 }
 
-.task-card__edit-button:active {
+.task-card__action-button:active {
   color: var(--color-creamy-latte);
   background: var(--color-espresso-shot);
 }
 
-.task-card__edit-button:focus-visible {
+.task-card__action-button:focus-visible {
   outline: 3px solid var(--color-espresso-shot);
   outline-offset: 3px;
+}
+
+.task-card__delete-button {
+  border-color: var(--color-error);
+  color: var(--color-error);
+  background: var(--color-creamy-latte);
+}
+
+.task-card__delete-button:hover,
+.task-card__delete-button:active {
+  color: var(--color-creamy-latte);
+  background: var(--color-error);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  progress::-webkit-progress-value {
+    transition: none;
+  }
+
+  progress::-moz-progress-bar {
+    transition: none;
+  }
 }
 
 .task-badge {

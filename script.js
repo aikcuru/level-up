@@ -115,6 +115,37 @@ function getAllSubjects(additionalSubjects = appState.additionalSubjects) {
   return [...DEFAULT_SUBJECTS, ...additionalSubjects];
 }
 
+function getTotalXpFromTasks(tasks) {
+  const totalXp = tasks.reduce(
+    (sum, task) => sum + (task.status === "completed" ? task.xpReward : 0),
+    0,
+  );
+
+  return Math.max(0, totalXp);
+}
+
+function getLevelFromTotalXp(totalXp) {
+  return Math.floor(totalXp / XP_PER_LEVEL) + 1;
+}
+
+function reconcileProfileWithTasks(state) {
+  const totalXp = getTotalXpFromTasks(state.tasks);
+  const level = getLevelFromTotalXp(totalXp);
+
+  if (state.profile.totalXp === totalXp && state.profile.level === level) {
+    return state;
+  }
+
+  return {
+    ...state,
+    profile: {
+      ...state.profile,
+      totalXp,
+      level,
+    },
+  };
+}
+
 function parseCalendarDate(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 
@@ -295,9 +326,8 @@ function isValidStoredState(value) {
 
   const hasValidName =
     typeof profile.name === "string" && profile.name.trim().length > 0;
-  const hasValidTotalXp =
-    Number.isFinite(profile.totalXp) && profile.totalXp >= 0;
-  const hasValidLevel = Number.isInteger(profile.level) && profile.level >= 1;
+  const hasValidTotalXp = Number.isFinite(profile.totalXp);
+  const hasValidLevel = Number.isInteger(profile.level);
   const hasValidSubjects = hasValidAdditionalSubjects(additionalSubjects);
   const availableSubjects = hasValidSubjects
     ? getAllSubjects(additionalSubjects)
@@ -347,7 +377,14 @@ function loadState() {
     }
 
     parsedState.profile.name = parsedState.profile.name.trim();
-    return parsedState;
+
+    const reconciledState = reconcileProfileWithTasks(parsedState);
+
+    if (reconciledState !== parsedState) {
+      saveState(reconciledState);
+    }
+
+    return reconciledState;
   } catch (error) {
     clearStoredState();
     return createInitialState();
@@ -370,6 +407,7 @@ function getProfileProgress(profile) {
   return {
     xpInsideLevel,
     xpToNextLevel: XP_PER_LEVEL - xpInsideLevel,
+    progressPercent: xpInsideLevel,
   };
 }
 
@@ -486,15 +524,30 @@ function createTaskCard(task, todayParts) {
   }
 
   if (task.status === "active") {
+    const completeButton = document.createElement("button");
     const editButton = document.createElement("button");
 
-    editButton.className = "task-card__edit-button";
+    completeButton.className =
+      "task-card__action-button task-card__complete-button";
+    completeButton.type = "button";
+    completeButton.textContent = "Выполнено";
+    completeButton.addEventListener("click", () => completeTask(task.id));
+    editButton.className =
+      "task-card__action-button task-card__edit-button";
     editButton.type = "button";
     editButton.textContent = "Редактировать";
     editButton.addEventListener("click", () => startEditingTask(task.id));
-    actions.append(editButton);
-    card.append(actions);
+    actions.append(completeButton, editButton);
   }
+
+  const deleteButton = document.createElement("button");
+
+  deleteButton.className = "task-card__action-button task-card__delete-button";
+  deleteButton.type = "button";
+  deleteButton.textContent = "Удалить";
+  deleteButton.addEventListener("click", () => deleteTask(task.id));
+  actions.append(deleteButton);
+  card.append(actions);
 
   return card;
 }
@@ -584,6 +637,92 @@ function resetFilters() {
   elements.directionFilter.value = FILTER_ALL;
   elements.subjectFilter.value = FILTER_ALL;
   renderTaskLists();
+}
+
+function closeEditingForTask(taskId) {
+  if (editingTaskId !== taskId) {
+    return;
+  }
+
+  setTaskFormCreateMode({ resetForm: true });
+  setTaskFormPanelOpen(false);
+  hideTaskFormStatus();
+}
+
+function completeTask(taskId) {
+  const taskIndex = appState.tasks.findIndex((task) => task.id === taskId);
+
+  if (taskIndex < 0) {
+    return false;
+  }
+
+  const task = appState.tasks[taskIndex];
+
+  if (task.status !== "active" || task.xpAwarded !== false) {
+    return false;
+  }
+
+  const completedTask = {
+    ...task,
+    status: "completed",
+    xpAwarded: true,
+  };
+  const updatedTasks = [...appState.tasks];
+
+  updatedTasks[taskIndex] = completedTask;
+
+  const nextState = reconcileProfileWithTasks({
+    ...appState,
+    tasks: updatedTasks,
+  });
+
+  if (!saveState(nextState)) {
+    return false;
+  }
+
+  appState = nextState;
+  closeEditingForTask(taskId);
+  renderProfile();
+  renderTaskLists();
+  return true;
+}
+
+function getDeleteConfirmationMessage(task) {
+  if (task.status === "completed") {
+    return `Удалить выполненную задачу «${task.title}»? Будет вычтено ${task.xpReward} XP.`;
+  }
+
+  return `Удалить задачу «${task.title}»?`;
+}
+
+function deleteTask(taskId) {
+  const taskIndex = appState.tasks.findIndex((task) => task.id === taskId);
+
+  if (taskIndex < 0) {
+    return false;
+  }
+
+  const task = appState.tasks[taskIndex];
+
+  if (!window.confirm(getDeleteConfirmationMessage(task))) {
+    return false;
+  }
+
+  const updatedTasks = appState.tasks.filter((candidate) => candidate.id !== taskId);
+  const nextState = reconcileProfileWithTasks({
+    ...appState,
+    tasks: updatedTasks,
+  });
+
+  if (!saveState(nextState)) {
+    return false;
+  }
+
+  appState = nextState;
+  closeEditingForTask(taskId);
+  renderProfile();
+  renderTaskLists();
+  return true;
 }
 
 function renderTaskLists() {
@@ -946,10 +1085,10 @@ function saveEditedTask(values) {
 
   updatedTasks[taskIndex] = updatedTask;
 
-  const nextState = {
+  const nextState = reconcileProfileWithTasks({
     ...appState,
     tasks: updatedTasks,
-  };
+  });
 
   if (!saveState(nextState)) {
     showTaskFormStatus("Не удалось сохранить изменения", true);
@@ -998,10 +1137,10 @@ function handleTaskSubmit(event) {
     xpAwarded: false,
     createdAt: new Date().toISOString(),
   };
-  const nextState = {
+  const nextState = reconcileProfileWithTasks({
     ...appState,
     tasks: [task, ...appState.tasks],
-  };
+  });
 
   if (!saveState(nextState)) {
     showTaskFormStatus("Не удалось сохранить задачу", true);
@@ -1120,15 +1259,21 @@ function showMainInterface() {
 
 function renderProfile() {
   const { profile } = appState;
-  const { xpInsideLevel, xpToNextLevel } = getProfileProgress(profile);
+  const { xpInsideLevel, xpToNextLevel, progressPercent } =
+    getProfileProgress(profile);
 
   elements.profileName.textContent = profile.name;
   elements.profileLevel.textContent = String(profile.level);
   elements.profileTotalXp.textContent = String(profile.totalXp);
   elements.profileXpToNext.textContent = String(xpToNextLevel);
   elements.profileProgressText.textContent = `${xpInsideLevel} из 100 XP`;
-  elements.profileProgress.value = xpInsideLevel;
-  elements.profileProgress.textContent = `${xpInsideLevel}%`;
+  elements.profileProgress.value = progressPercent;
+  elements.profileProgress.textContent = `${progressPercent}%`;
+  elements.profileProgress.setAttribute("aria-valuenow", String(progressPercent));
+  elements.profileProgress.setAttribute(
+    "aria-valuetext",
+    `${xpInsideLevel} из 100 XP`,
+  );
 }
 
 function handleNameSubmit(event) {
