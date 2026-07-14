@@ -393,10 +393,82 @@
               </div>
             </section>
 
-            <section class="panel panel--full" aria-labelledby="calendar-title">
-              <p class="eyebrow">Месяц</p>
-              <h2 id="calendar-title">Календарь</h2>
-              <p class="empty-note">Здесь появится обзор активных задач по дням.</p>
+            <section
+              class="panel panel--full calendar"
+              aria-labelledby="calendar-title"
+            >
+              <div class="calendar__header">
+                <div>
+                  <p class="eyebrow">Месяц</p>
+                  <h2 id="calendar-title">Календарь</h2>
+                  <p class="calendar__month" id="calendar-month" aria-live="polite"></p>
+                </div>
+
+                <div class="calendar__controls" aria-label="Управление календарём">
+                  <button
+                    class="calendar__control-button"
+                    id="calendar-previous"
+                    type="button"
+                    aria-label="Предыдущий месяц"
+                  >
+                    Предыдущий месяц
+                  </button>
+                  <button
+                    class="calendar__control-button"
+                    id="calendar-today"
+                    type="button"
+                    aria-label="Перейти к сегодняшней дате"
+                  >
+                    Сегодня
+                  </button>
+                  <button
+                    class="calendar__control-button"
+                    id="calendar-next"
+                    type="button"
+                    aria-label="Следующий месяц"
+                  >
+                    Следующий месяц
+                  </button>
+                </div>
+              </div>
+
+              <div
+                class="calendar-legend"
+                id="calendar-legend"
+                aria-label="Легенда предметов"
+              ></div>
+
+              <div class="calendar__weekdays" aria-hidden="true">
+                <span>Пн</span>
+                <span>Вт</span>
+                <span>Ср</span>
+                <span>Чт</span>
+                <span>Пт</span>
+                <span>Сб</span>
+                <span>Вс</span>
+              </div>
+
+              <div
+                class="calendar__grid"
+                id="calendar-grid"
+                aria-label="Дни месяца"
+              ></div>
+
+              <section
+                class="calendar-day-overview"
+                id="calendar-day-overview"
+                aria-labelledby="calendar-selected-date"
+              >
+                <h3 id="calendar-selected-date"></h3>
+                <div
+                  class="calendar-day-overview__list"
+                  id="calendar-selected-tasks"
+                  aria-live="polite"
+                ></div>
+                <p class="empty-note" id="calendar-selected-empty">
+                  На этот день активных задач нет
+                </p>
+              </section>
             </section>
 
             <section
@@ -419,5 +491,12 @@
         <p>Данные хранятся только в браузере на этом устройстве.</p>
       </footer>
     </div>
+
+    <div
+      class="calendar-task-tooltip"
+      id="calendar-task-tooltip"
+      role="tooltip"
+      hidden
+    ></div>
   </body>
 </html>

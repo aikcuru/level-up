@@ -31,6 +31,55 @@ const DIFFICULTY_LABELS = Object.freeze({
   medium: "Средняя",
   hard: "Сложная",
 });
+const CALENDAR_MONTH_NAMES = Object.freeze([
+  "январь",
+  "февраль",
+  "март",
+  "апрель",
+  "май",
+  "июнь",
+  "июль",
+  "август",
+  "сентябрь",
+  "октябрь",
+  "ноябрь",
+  "декабрь",
+]);
+const CALENDAR_MONTH_NAMES_GENITIVE = Object.freeze([
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
+]);
+const BASE_SUBJECT_ORDER = Object.freeze([
+  "Русский язык",
+  "Математика",
+  "История",
+  "Физика",
+]);
+const BASE_SUBJECT_COLORS = Object.freeze({
+  "русский язык": "#F2D6D0",
+  математика: "#D8E7F2",
+  история: "#E9DDB9",
+  физика: "#DED9F1",
+  "без предмета": "#E6DED5",
+});
+const ADDITIONAL_SUBJECT_COLORS = Object.freeze([
+  "#D6E4D5",
+  "#F0D8E6",
+  "#D9E8DF",
+  "#EAD5C7",
+  "#D7E0EE",
+  "#E4D8C7",
+]);
 
 const elements = {
   welcomePanel: document.querySelector("#welcome-panel"),
@@ -83,12 +132,29 @@ const elements = {
   profileXpToNext: document.querySelector("#profile-xp-to-next"),
   profileProgressText: document.querySelector("#profile-progress-text"),
   profileProgress: document.querySelector("#profile-progress"),
+  calendarMonth: document.querySelector("#calendar-month"),
+  calendarPrevious: document.querySelector("#calendar-previous"),
+  calendarToday: document.querySelector("#calendar-today"),
+  calendarNext: document.querySelector("#calendar-next"),
+  calendarLegend: document.querySelector("#calendar-legend"),
+  calendarGrid: document.querySelector("#calendar-grid"),
+  calendarSelectedDate: document.querySelector("#calendar-selected-date"),
+  calendarSelectedTasks: document.querySelector("#calendar-selected-tasks"),
+  calendarSelectedEmpty: document.querySelector("#calendar-selected-empty"),
+  calendarTaskTooltip: document.querySelector("#calendar-task-tooltip"),
 };
 
 let appState = createInitialState();
 let activeTasksExpanded = true;
 let editingTaskId = null;
 let editingDeadlineAtOpen = null;
+const initialCalendarToday = getLocalTodayParts();
+let calendarYear = initialCalendarToday.year;
+let calendarMonth = initialCalendarToday.month;
+let selectedCalendarDate = toCalendarDateKey(initialCalendarToday);
+let calendarTooltipTrigger = null;
+let calendarTooltipTaskId = null;
+let calendarTooltipCloseTimer = null;
 
 function createInitialState(name = "") {
   return {
@@ -157,15 +223,11 @@ function parseCalendarDate(value) {
   const year = Number(yearText);
   const month = Number(monthText);
   const day = Number(dayText);
-  const date = new Date(0);
-
-  date.setUTCHours(0, 0, 0, 0);
-  date.setUTCFullYear(year, month - 1, day);
-
   const isValid =
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day;
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= getDaysInMonth(year, month);
 
   return isValid ? { year, month, day } : null;
 }
@@ -195,7 +257,19 @@ function getLocalTodayParts(date = new Date()) {
 }
 
 function getCalendarDayIndex({ year, month, day }) {
-  return Date.UTC(year, month - 1, day) / 86400000;
+  const adjustedYear = year - (month <= 2 ? 1 : 0);
+  const era = Math.floor(adjustedYear / 400);
+  const yearOfEra = adjustedYear - era * 400;
+  const adjustedMonth = month + (month > 2 ? -3 : 9);
+  const dayOfYear =
+    Math.floor((153 * adjustedMonth + 2) / 5) + day - 1;
+  const dayOfEra =
+    yearOfEra * 365 +
+    Math.floor(yearOfEra / 4) -
+    Math.floor(yearOfEra / 100) +
+    dayOfYear;
+
+  return era * 146097 + dayOfEra;
 }
 
 function getDayWord(value) {
@@ -216,6 +290,578 @@ function getDayWord(value) {
   }
 
   return "дней";
+}
+
+function toCalendarDateKey({ year, month, day }) {
+  return [year, month, day]
+    .map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0"))
+    .join("-");
+}
+
+function getDaysInMonth(year, month) {
+  const days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const isLeapYear =
+    year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+
+  return month === 2 && isLeapYear ? 29 : days[month - 1];
+}
+
+function getMondayFirstOffset(year, month) {
+  const dayIndex = getCalendarDayIndex({ year, month, day: 1 });
+
+  return ((dayIndex + 2) % 7 + 7) % 7;
+}
+
+function formatFullCalendarDate({ year, month, day }) {
+  return `${day} ${CALENDAR_MONTH_NAMES_GENITIVE[month - 1]} ${year} года`;
+}
+
+function getSubjectLabel(subject) {
+  return subject ?? "Без предмета";
+}
+
+function getSubjectColor(subject) {
+  const normalizedSubject = normalizeForComparison(getSubjectLabel(subject));
+  const baseColor = BASE_SUBJECT_COLORS[normalizedSubject];
+
+  if (baseColor) {
+    return baseColor;
+  }
+
+  let hash = 0;
+
+  for (const character of normalizedSubject) {
+    hash = (hash * 31 + character.codePointAt(0)) >>> 0;
+  }
+
+  return ADDITIONAL_SUBJECT_COLORS[hash % ADDITIONAL_SUBJECT_COLORS.length];
+}
+
+function isTaskOverdueForCalendar(task, todayKey) {
+  return task.status === "active" && task.currentDeadline < todayKey;
+}
+
+function getCalendarMonthTasks() {
+  return appState.tasks.filter((task) => {
+    const deadline = parseCalendarDate(task.currentDeadline);
+
+    return (
+      task.status === "active" &&
+      deadline?.year === calendarYear &&
+      deadline.month === calendarMonth
+    );
+  });
+}
+
+function getLegendSubjects(tasks) {
+  const subjectsByNormalizedName = new Map();
+
+  for (const task of tasks) {
+    const label = getSubjectLabel(task.subject);
+    const normalizedLabel = normalizeForComparison(label);
+
+    if (!subjectsByNormalizedName.has(normalizedLabel)) {
+      subjectsByNormalizedName.set(normalizedLabel, task.subject);
+    }
+  }
+
+  const baseIndexes = new Map(
+    BASE_SUBJECT_ORDER.map((subject, index) => [
+      normalizeForComparison(subject),
+      index,
+    ]),
+  );
+
+  return [...subjectsByNormalizedName.values()].sort((left, right) => {
+    const leftLabel = getSubjectLabel(left);
+    const rightLabel = getSubjectLabel(right);
+    const leftNormalized = normalizeForComparison(leftLabel);
+    const rightNormalized = normalizeForComparison(rightLabel);
+    const leftIsWithoutSubject = left === null;
+    const rightIsWithoutSubject = right === null;
+
+    if (leftIsWithoutSubject !== rightIsWithoutSubject) {
+      return leftIsWithoutSubject ? 1 : -1;
+    }
+
+    const leftBaseIndex = baseIndexes.get(leftNormalized);
+    const rightBaseIndex = baseIndexes.get(rightNormalized);
+
+    if (leftBaseIndex !== undefined || rightBaseIndex !== undefined) {
+      if (leftBaseIndex === undefined) {
+        return 1;
+      }
+
+      if (rightBaseIndex === undefined) {
+        return -1;
+      }
+
+      return leftBaseIndex - rightBaseIndex;
+    }
+
+    return leftLabel.localeCompare(rightLabel, "ru-RU");
+  });
+}
+
+function renderCalendarLegend(monthTasks) {
+  const subjects = getLegendSubjects(monthTasks);
+
+  if (subjects.length === 0) {
+    const empty = document.createElement("p");
+
+    empty.className = "calendar-legend__empty";
+    empty.textContent = "В этом месяце активных задач нет";
+    elements.calendarLegend.replaceChildren(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  for (const subject of subjects) {
+    const item = document.createElement("span");
+    const swatch = document.createElement("span");
+    const label = document.createElement("span");
+    const subjectLabel = getSubjectLabel(subject);
+
+    item.className = "calendar-legend__item";
+    swatch.className = "calendar-legend__swatch";
+    swatch.style.backgroundColor = getSubjectColor(subject);
+    swatch.setAttribute("aria-hidden", "true");
+    label.textContent = subjectLabel;
+    item.append(swatch, label);
+    fragment.append(item);
+  }
+
+  elements.calendarLegend.replaceChildren(fragment);
+}
+
+function isCalendarDesktopView() {
+  return window.matchMedia("(min-width: 768px)").matches;
+}
+
+function cancelCalendarTooltipClose() {
+  if (calendarTooltipCloseTimer !== null) {
+    window.clearTimeout(calendarTooltipCloseTimer);
+    calendarTooltipCloseTimer = null;
+  }
+}
+
+function closeCalendarTaskTooltip() {
+  cancelCalendarTooltipClose();
+  calendarTooltipTrigger?.removeAttribute("aria-describedby");
+  calendarTooltipTrigger = null;
+  calendarTooltipTaskId = null;
+  elements.calendarTaskTooltip.hidden = true;
+  elements.calendarTaskTooltip.replaceChildren();
+  elements.calendarTaskTooltip.style.removeProperty("left");
+  elements.calendarTaskTooltip.style.removeProperty("top");
+}
+
+function positionCalendarTaskTooltip() {
+  if (
+    elements.calendarTaskTooltip.hidden ||
+    calendarTooltipTrigger === null ||
+    !calendarTooltipTrigger.isConnected ||
+    !isCalendarDesktopView()
+  ) {
+    return;
+  }
+
+  const viewportGap = 12;
+  const triggerGap = 8;
+  const triggerRect = calendarTooltipTrigger.getBoundingClientRect();
+  const tooltipRect = elements.calendarTaskTooltip.getBoundingClientRect();
+  const spaceBelow = window.innerHeight - triggerRect.bottom - viewportGap;
+  const spaceAbove = triggerRect.top - viewportGap;
+  let top = triggerRect.bottom + triggerGap;
+
+  if (spaceBelow < tooltipRect.height + triggerGap && spaceAbove > spaceBelow) {
+    top = triggerRect.top - tooltipRect.height - triggerGap;
+  }
+
+  top = Math.min(
+    Math.max(top, viewportGap),
+    Math.max(viewportGap, window.innerHeight - tooltipRect.height - viewportGap),
+  );
+
+  let left = triggerRect.left;
+
+  if (left + tooltipRect.width > window.innerWidth - viewportGap) {
+    left = triggerRect.right - tooltipRect.width;
+  }
+
+  left = Math.min(
+    Math.max(left, viewportGap),
+    Math.max(viewportGap, window.innerWidth - tooltipRect.width - viewportGap),
+  );
+
+  elements.calendarTaskTooltip.style.left = `${Math.round(left)}px`;
+  elements.calendarTaskTooltip.style.top = `${Math.round(top)}px`;
+}
+
+function createCalendarTooltipContent(task) {
+  const deadlineState = getDeadlineState(task);
+  const fragment = document.createDocumentFragment();
+  const title = document.createElement("h3");
+  const statuses = document.createElement("div");
+  const activeStatus = document.createElement("span");
+  const details = document.createElement("dl");
+
+  title.className = "calendar-task-tooltip__title";
+  title.textContent = task.title;
+  statuses.className = "calendar-task-tooltip__statuses";
+  activeStatus.className = "task-badge";
+  activeStatus.textContent = "Активная";
+  statuses.append(activeStatus);
+
+  if (deadlineState.kind === "overdue") {
+    const overdueStatus = document.createElement("span");
+
+    overdueStatus.className = "task-badge task-badge--overdue";
+    overdueStatus.textContent = "Просрочено";
+    statuses.append(overdueStatus);
+  }
+
+  details.className = "calendar-task-tooltip__details";
+  details.append(
+    createTaskDetail("Направление", task.direction),
+    createTaskDetail("Предмет", getSubjectLabel(task.subject)),
+    createTaskDetail("Дедлайн", formatCalendarDate(task.currentDeadline)),
+    createTaskDetail(
+      "Срок",
+      deadlineState.message,
+      ["task-card__detail--term", `task-card__detail--${deadlineState.kind}`],
+    ),
+    createTaskDetail("Сложность", DIFFICULTY_LABELS[task.difficulty]),
+    createTaskDetail("Награда", `${task.xpReward} XP`),
+  );
+  fragment.append(title, statuses, details);
+
+  if (task.postponementCount > 0) {
+    const postponements = document.createElement("p");
+
+    postponements.className = "calendar-task-tooltip__postponements";
+    postponements.textContent = `Переносов дедлайна: ${task.postponementCount}`;
+    fragment.append(postponements);
+  }
+
+  return fragment;
+}
+
+function openCalendarTaskTooltip(trigger, task) {
+  if (!isCalendarDesktopView()) {
+    closeCalendarTaskTooltip();
+    return;
+  }
+
+  cancelCalendarTooltipClose();
+
+  if (calendarTooltipTrigger !== trigger) {
+    closeCalendarTaskTooltip();
+  }
+
+  calendarTooltipTrigger = trigger;
+  calendarTooltipTaskId = task.id;
+  elements.calendarTaskTooltip.replaceChildren(
+    createCalendarTooltipContent(task),
+  );
+  elements.calendarTaskTooltip.hidden = false;
+  trigger.setAttribute("aria-describedby", elements.calendarTaskTooltip.id);
+  positionCalendarTaskTooltip();
+}
+
+function scheduleCalendarTooltipClose() {
+  cancelCalendarTooltipClose();
+  calendarTooltipCloseTimer = window.setTimeout(() => {
+    calendarTooltipCloseTimer = null;
+
+    const pointerRemainsInside =
+      calendarTooltipTrigger?.matches(":hover") ||
+      elements.calendarTaskTooltip.matches(":hover");
+    const focusRemainsInside =
+      calendarTooltipTrigger?.contains(document.activeElement) ||
+      elements.calendarTaskTooltip.contains(document.activeElement);
+
+    if (!pointerRemainsInside && !focusRemainsInside) {
+      closeCalendarTaskTooltip();
+    }
+  }, 80);
+}
+
+function updateCalendarTaskTabStops() {
+  const tabIndex = isCalendarDesktopView() ? 0 : -1;
+
+  for (const pill of elements.calendarGrid.querySelectorAll(".calendar-task")) {
+    pill.tabIndex = tabIndex;
+  }
+
+  if (tabIndex < 0) {
+    closeCalendarTaskTooltip();
+  }
+}
+
+function handleCalendarViewportChange() {
+  updateCalendarTaskTabStops();
+
+  if (isCalendarDesktopView()) {
+    positionCalendarTaskTooltip();
+  }
+}
+
+function createCalendarTaskPill(task, todayKey) {
+  const pill = document.createElement("span");
+  const title = document.createElement("span");
+  const subjectLabel = getSubjectLabel(task.subject);
+  const isOverdue = isTaskOverdueForCalendar(task, todayKey);
+
+  pill.className = "calendar-task";
+  pill.dataset.taskId = task.id;
+  pill.tabIndex = isCalendarDesktopView() ? 0 : -1;
+  pill.style.backgroundColor = getSubjectColor(task.subject);
+  title.className = "calendar-task__title";
+  title.textContent = task.title;
+
+  if (isOverdue) {
+    const overdueMark = document.createElement("span");
+
+    pill.classList.add("calendar-task--overdue");
+    overdueMark.className = "calendar-task__overdue-mark";
+    overdueMark.textContent = "!";
+    overdueMark.setAttribute("aria-hidden", "true");
+    pill.append(overdueMark);
+  }
+
+  pill.append(title);
+  pill.setAttribute(
+    "aria-label",
+    `${task.title}, ${subjectLabel}${isOverdue ? ", Просрочено" : ""}`,
+  );
+  pill.addEventListener("mouseenter", () =>
+    openCalendarTaskTooltip(pill, task),
+  );
+  pill.addEventListener("mouseleave", scheduleCalendarTooltipClose);
+  pill.addEventListener("focus", () => openCalendarTaskTooltip(pill, task));
+  pill.addEventListener("blur", scheduleCalendarTooltipClose);
+  pill.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeCalendarTaskTooltip();
+    }
+  });
+  return pill;
+}
+
+function createCalendarDayButton(parts, tasks, todayKey) {
+  const dateKey = toCalendarDateKey(parts);
+  const fullDate = formatFullCalendarDate(parts);
+  const isToday = dateKey === todayKey;
+  const isSelected = dateKey === selectedCalendarDate;
+  const cell = document.createElement("div");
+  const button = document.createElement("button");
+  const topline = document.createElement("span");
+  const number = document.createElement("span");
+  const labels = [];
+
+  cell.className = "calendar-day";
+  cell.dataset.date = dateKey;
+  cell.setAttribute("aria-selected", String(isSelected));
+  button.className = "calendar-day__button";
+  button.type = "button";
+  button.setAttribute("aria-selected", String(isSelected));
+  topline.className = "calendar-day__topline";
+  number.className = "calendar-day__number";
+  number.textContent = String(parts.day);
+  topline.append(number);
+
+  if (isToday) {
+    const todayLabel = document.createElement("span");
+
+    cell.classList.add("calendar-day--today");
+    button.setAttribute("aria-current", "date");
+    todayLabel.className = "calendar-day__today-label";
+    todayLabel.textContent = "Сегодня";
+    topline.append(todayLabel);
+    labels.push("Сегодня");
+  }
+
+  if (isSelected) {
+    const selectedLabel = document.createElement("span");
+
+    selectedLabel.className = "calendar-day__selected-label";
+    selectedLabel.textContent = "Выбран";
+    topline.append(selectedLabel);
+    labels.push("Выбранный день");
+  }
+
+  button.append(topline);
+  cell.append(button);
+
+  if (tasks.length > 0) {
+    const tasksWrapper = document.createElement("span");
+    const count = document.createElement("span");
+
+    tasksWrapper.className = "calendar-day__tasks";
+
+    for (const task of tasks.slice(0, 3)) {
+      tasksWrapper.append(createCalendarTaskPill(task, todayKey));
+    }
+
+    cell.append(tasksWrapper);
+
+    if (tasks.length > 3) {
+      const more = document.createElement("span");
+
+      more.className = "calendar-day__more";
+      more.textContent = `+ ещё ${tasks.length - 3}`;
+      cell.append(more);
+    }
+
+    count.className = "calendar-day__count";
+    count.textContent = String(tasks.length);
+    count.setAttribute(
+      "aria-label",
+      `Активных задач: ${tasks.length}`,
+    );
+    button.append(count);
+  }
+
+  const tasksLabel =
+    tasks.length === 0 ? "активных задач нет" : `активных задач: ${tasks.length}`;
+  button.setAttribute(
+    "aria-label",
+    [fullDate, ...labels, tasksLabel].join(", "),
+  );
+  button.addEventListener("click", () => {
+    selectedCalendarDate = dateKey;
+    renderCalendar();
+  });
+  return cell;
+}
+
+function createCalendarDayOverviewTask(task, todayParts) {
+  const deadlineState = getDeadlineState(task, todayParts);
+  const item = document.createElement("article");
+  const heading = document.createElement("div");
+  const marker = document.createElement("span");
+  const title = document.createElement("h4");
+  const details = document.createElement("p");
+
+  item.className = "calendar-day-task";
+  heading.className = "calendar-day-task__heading";
+  marker.className = "calendar-day-task__marker";
+  marker.style.backgroundColor = getSubjectColor(task.subject);
+  marker.setAttribute("aria-hidden", "true");
+  title.className = "calendar-day-task__title";
+  title.textContent = task.title;
+  details.className = "calendar-day-task__details";
+  details.textContent = `${task.direction} · ${getSubjectLabel(task.subject)} · ${deadlineState.message}`;
+  heading.append(marker, title);
+  item.append(heading, details);
+
+  if (deadlineState.kind === "overdue") {
+    const overdue = document.createElement("p");
+
+    item.classList.add("calendar-day-task--overdue");
+    overdue.className = "calendar-day-task__overdue-text";
+    overdue.textContent = "Просрочено";
+    item.append(overdue);
+  }
+
+  return item;
+}
+
+function renderCalendarDayOverview(todayParts) {
+  const selectedParts = parseCalendarDate(selectedCalendarDate);
+  const selectedTasks = appState.tasks.filter(
+    (task) =>
+      task.status === "active" &&
+      task.currentDeadline === selectedCalendarDate,
+  );
+  const fragment = document.createDocumentFragment();
+
+  elements.calendarSelectedDate.textContent = `Задачи на ${formatFullCalendarDate(selectedParts)}`;
+
+  for (const task of selectedTasks) {
+    fragment.append(createCalendarDayOverviewTask(task, todayParts));
+  }
+
+  elements.calendarSelectedTasks.replaceChildren(fragment);
+  elements.calendarSelectedEmpty.hidden = selectedTasks.length > 0;
+}
+
+function renderCalendar() {
+  closeCalendarTaskTooltip();
+
+  const todayParts = getLocalTodayParts();
+  const todayKey = toCalendarDateKey(todayParts);
+  const monthTasks = getCalendarMonthTasks();
+  const tasksByDate = new Map();
+
+  for (const task of monthTasks) {
+    const tasks = tasksByDate.get(task.currentDeadline) ?? [];
+
+    tasks.push(task);
+    tasksByDate.set(task.currentDeadline, tasks);
+  }
+
+  elements.calendarMonth.textContent = `${CALENDAR_MONTH_NAMES[calendarMonth - 1]} ${calendarYear}`;
+  renderCalendarLegend(monthTasks);
+
+  const daysInMonth = getDaysInMonth(calendarYear, calendarMonth);
+  const leadingEmptyCells = getMondayFirstOffset(calendarYear, calendarMonth);
+  const totalCells = Math.ceil((leadingEmptyCells + daysInMonth) / 7) * 7;
+  const fragment = document.createDocumentFragment();
+
+  for (let cellIndex = 0; cellIndex < totalCells; cellIndex += 1) {
+    const day = cellIndex - leadingEmptyCells + 1;
+
+    if (day < 1 || day > daysInMonth) {
+      const emptyCell = document.createElement("div");
+
+      emptyCell.className = "calendar__empty-cell";
+      emptyCell.setAttribute("aria-hidden", "true");
+      fragment.append(emptyCell);
+      continue;
+    }
+
+    const parts = { year: calendarYear, month: calendarMonth, day };
+    const dateKey = toCalendarDateKey(parts);
+
+    fragment.append(
+      createCalendarDayButton(
+        parts,
+        tasksByDate.get(dateKey) ?? [],
+        todayKey,
+      ),
+    );
+  }
+
+  elements.calendarGrid.replaceChildren(fragment);
+  updateCalendarTaskTabStops();
+  renderCalendarDayOverview(todayParts);
+}
+
+function changeCalendarMonth(monthDelta) {
+  const absoluteMonth = calendarYear * 12 + calendarMonth - 1 + monthDelta;
+
+  calendarYear = Math.floor(absoluteMonth / 12);
+  calendarMonth = ((absoluteMonth % 12) + 12) % 12 + 1;
+  selectedCalendarDate = toCalendarDateKey({
+    year: calendarYear,
+    month: calendarMonth,
+    day: 1,
+  });
+  renderCalendar();
+}
+
+function showCalendarToday() {
+  const todayParts = getLocalTodayParts();
+
+  calendarYear = todayParts.year;
+  calendarMonth = todayParts.month;
+  selectedCalendarDate = toCalendarDateKey(todayParts);
+  renderCalendar();
 }
 
 function getDeadlineState(task, todayParts = getLocalTodayParts()) {
@@ -776,6 +1422,7 @@ function renderTaskLists() {
     statusFilter === "completed" ||
     (hasVisibleActiveTasks && !activeTasksExpanded);
   updateFiltersResetButton();
+  renderCalendar();
 }
 
 function renderSubjects() {
@@ -1314,6 +1961,34 @@ function initializeApp() {
   elements.filtersToggle.addEventListener("click", toggleFiltersPanel);
   elements.filtersResetButton.addEventListener("click", resetFilters);
   elements.activeListToggle.addEventListener("click", toggleActiveTasks);
+  elements.calendarTaskTooltip.addEventListener(
+    "mouseenter",
+    cancelCalendarTooltipClose,
+  );
+  elements.calendarTaskTooltip.addEventListener(
+    "mouseleave",
+    scheduleCalendarTooltipClose,
+  );
+  elements.calendarTaskTooltip.addEventListener(
+    "focusin",
+    cancelCalendarTooltipClose,
+  );
+  elements.calendarTaskTooltip.addEventListener(
+    "focusout",
+    scheduleCalendarTooltipClose,
+  );
+  elements.calendarTaskTooltip.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeCalendarTaskTooltip();
+    }
+  });
+  elements.calendarPrevious.addEventListener("click", () =>
+    changeCalendarMonth(-1),
+  );
+  elements.calendarToday.addEventListener("click", showCalendarToday);
+  elements.calendarNext.addEventListener("click", () => changeCalendarMonth(1));
   elements.subjectForm.addEventListener("submit", handleSubjectSubmit);
   elements.subjectNameInput.addEventListener("input", () => {
     clearFieldError(elements.subjectNameInput, elements.subjectNameError);
@@ -1333,6 +2008,8 @@ function initializeApp() {
   elements.directionFilter.addEventListener("change", renderTaskLists);
   elements.subjectFilter.addEventListener("change", renderTaskLists);
   document.addEventListener("keydown", handleDocumentKeydown);
+  window.addEventListener("resize", handleCalendarViewportChange);
+  window.addEventListener("scroll", positionCalendarTaskTooltip, true);
 
   renderSubjects();
   renderSubjectFilterOptions();
