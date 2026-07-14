@@ -200,8 +200,18 @@
               </div>
 
               <div class="expandable-panel" id="task-form-panel" hidden>
-                <form class="task-form" id="task-form" novalidate>
+                <form
+                  class="task-form"
+                  id="task-form"
+                  aria-labelledby="task-form-heading"
+                  novalidate
+                >
                   <div class="task-form__grid">
+                    <div class="task-form__mode field--full">
+                      <h3 id="task-form-heading">Новая задача</h3>
+                      <p id="task-form-context" hidden></p>
+                    </div>
+
                     <div class="field field--full">
                       <label for="task-title-input">Название</label>
                       <input
@@ -307,9 +317,23 @@
                       <strong class="xp-preview" id="xp-preview">— XP</strong>
                     </div>
 
-                    <button class="primary-button task-form__submit" type="submit">
-                      Добавить задачу
-                    </button>
+                    <div class="task-form__actions">
+                      <button
+                        class="primary-button task-form__submit"
+                        id="task-form-submit"
+                        type="submit"
+                      >
+                        Добавить задачу
+                      </button>
+                      <button
+                        class="secondary-button task-form__cancel"
+                        id="task-form-cancel"
+                        type="button"
+                        hidden
+                      >
+                        Отменить
+                      </button>
+                    </div>
                   </div>
                 </form>
               </div>

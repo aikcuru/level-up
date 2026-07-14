@@ -634,6 +634,29 @@ progress::-moz-progress-bar {
   background: var(--color-warm-cappuccino);
 }
 
+.task-form__mode h3,
+.task-form__mode p {
+  margin: 0;
+}
+
+.task-form__mode p {
+  margin-top: 4px;
+  color: var(--color-mocha-bean);
+  overflow-wrap: anywhere;
+}
+
+.task-form__actions {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.task-form__actions .primary-button,
+.task-form__actions .secondary-button {
+  flex: 1 1 0;
+}
+
 #filters-panel {
   position: relative;
   padding-top: 68px;
@@ -738,6 +761,38 @@ progress::-moz-progress-bar {
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+}
+
+.task-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.task-card__edit-button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-mocha-bean);
+  border-radius: var(--radius-small);
+  color: var(--color-espresso-shot);
+  background: var(--color-caramel-roast);
+  font-weight: 800;
+}
+
+.task-card__edit-button:hover {
+  color: var(--color-creamy-latte);
+  background: var(--color-mocha-bean);
+}
+
+.task-card__edit-button:active {
+  color: var(--color-creamy-latte);
+  background: var(--color-espresso-shot);
+}
+
+.task-card__edit-button:focus-visible {
+  outline: 3px solid var(--color-espresso-shot);
+  outline-offset: 3px;
 }
 
 .task-badge {
@@ -907,6 +962,11 @@ progress::-moz-progress-bar {
 
   .task-form__reward {
     width: 100%;
+  }
+
+  .task-form__actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

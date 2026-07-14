@@ -45,6 +45,10 @@ const elements = {
   subjectNameError: document.querySelector("#subject-name-error"),
   subjectsList: document.querySelector("#subjects-list"),
   taskForm: document.querySelector("#task-form"),
+  taskFormHeading: document.querySelector("#task-form-heading"),
+  taskFormContext: document.querySelector("#task-form-context"),
+  taskFormSubmit: document.querySelector("#task-form-submit"),
+  taskFormCancel: document.querySelector("#task-form-cancel"),
   taskTitleInput: document.querySelector("#task-title-input"),
   taskTitleError: document.querySelector("#task-title-error"),
   taskDirectionSelect: document.querySelector("#task-direction-select"),
@@ -83,6 +87,8 @@ const elements = {
 
 let appState = createInitialState();
 let activeTasksExpanded = true;
+let editingTaskId = null;
+let editingDeadlineAtOpen = null;
 
 function createInitialState(name = "") {
   return {
@@ -427,6 +433,7 @@ function createTaskCard(task, todayParts) {
   const badges = document.createElement("div");
   const statusBadge = document.createElement("span");
   const details = document.createElement("dl");
+  const actions = document.createElement("div");
 
   card.className = "task-card";
   header.className = "task-card__header";
@@ -434,6 +441,7 @@ function createTaskCard(task, todayParts) {
   badges.className = "task-card__badges";
   statusBadge.className = "task-badge";
   details.className = "task-card__details";
+  actions.className = "task-card__actions";
 
   if (task.status === "completed") {
     card.classList.add("task-card--completed");
@@ -467,16 +475,27 @@ function createTaskCard(task, todayParts) {
     createTaskDetail("Награда", `${task.xpReward} XP`),
   );
 
+  card.append(header, details);
+
   if (task.postponementCount > 0) {
     const postponements = document.createElement("p");
 
     postponements.className = "task-card__postponements";
     postponements.textContent = `Переносов дедлайна: ${task.postponementCount}`;
-    card.append(header, details, postponements);
-    return card;
+    card.append(postponements);
   }
 
-  card.append(header, details);
+  if (task.status === "active") {
+    const editButton = document.createElement("button");
+
+    editButton.className = "task-card__edit-button";
+    editButton.type = "button";
+    editButton.textContent = "Редактировать";
+    editButton.addEventListener("click", () => startEditingTask(task.id));
+    actions.append(editButton);
+    card.append(actions);
+  }
+
   return card;
 }
 
@@ -713,6 +732,63 @@ function showTaskFormStatus(message, isError = false) {
   elements.taskFormStatus.setAttribute("role", isError ? "alert" : "status");
 }
 
+function setTaskFormCreateMode({ resetForm = false } = {}) {
+  editingTaskId = null;
+  editingDeadlineAtOpen = null;
+  elements.taskFormHeading.textContent = "Новая задача";
+  elements.taskFormContext.textContent = "";
+  elements.taskFormContext.hidden = true;
+  elements.taskFormSubmit.textContent = "Добавить задачу";
+  elements.taskFormCancel.hidden = true;
+
+  if (resetForm) {
+    elements.taskForm.reset();
+    clearTaskErrors();
+    updateSubjectField();
+    updateDifficultyPreview();
+  }
+}
+
+function cancelTaskEditing({ closePanel = true } = {}) {
+  setTaskFormCreateMode({ resetForm: true });
+  hideTaskFormStatus();
+
+  if (closePanel) {
+    setTaskFormPanelOpen(false);
+  }
+}
+
+function startEditingTask(taskId) {
+  const task = appState.tasks.find(
+    (candidate) => candidate.id === taskId && candidate.status === "active",
+  );
+
+  if (!task) {
+    return;
+  }
+
+  editingTaskId = task.id;
+  editingDeadlineAtOpen = task.currentDeadline;
+  clearTaskErrors();
+  hideTaskFormStatus();
+  elements.taskForm.reset();
+  elements.taskFormHeading.textContent = "Редактирование задачи";
+  elements.taskFormContext.textContent = `Редактируется: ${task.title}`;
+  elements.taskFormContext.hidden = false;
+  elements.taskFormSubmit.textContent = "Сохранить изменения";
+  elements.taskFormCancel.hidden = false;
+  elements.taskTitleInput.value = task.title;
+  elements.taskDirectionSelect.value = task.direction;
+  updateSubjectField();
+  elements.taskSubjectSelect.value = task.subject ?? "";
+  elements.taskDifficultySelect.value = task.difficulty;
+  elements.taskDeadlineInput.value = task.currentDeadline;
+  updateDifficultyPreview();
+  setActiveTasksExpanded(true);
+  setTaskFormPanelOpen(true);
+  elements.taskTitleInput.focus();
+}
+
 function createTaskId() {
   if (
     globalThis.crypto &&
@@ -843,6 +919,50 @@ function validateTaskForm() {
   };
 }
 
+function saveEditedTask(values) {
+  const taskIndex = appState.tasks.findIndex(
+    (task) => task.id === editingTaskId && task.status === "active",
+  );
+
+  if (taskIndex < 0 || editingDeadlineAtOpen === null) {
+    showTaskFormStatus("Не удалось найти активную задачу", true);
+    return;
+  }
+
+  const currentTask = appState.tasks[taskIndex];
+  const deadlineWasPostponed = values.deadline > editingDeadlineAtOpen;
+  const updatedTask = {
+    ...currentTask,
+    title: values.title,
+    direction: values.direction,
+    subject: values.subject || null,
+    difficulty: values.difficulty,
+    xpReward: DIFFICULTY_REWARDS[values.difficulty],
+    currentDeadline: values.deadline,
+    postponementCount:
+      currentTask.postponementCount + (deadlineWasPostponed ? 1 : 0),
+  };
+  const updatedTasks = [...appState.tasks];
+
+  updatedTasks[taskIndex] = updatedTask;
+
+  const nextState = {
+    ...appState,
+    tasks: updatedTasks,
+  };
+
+  if (!saveState(nextState)) {
+    showTaskFormStatus("Не удалось сохранить изменения", true);
+    return;
+  }
+
+  appState = nextState;
+  setTaskFormCreateMode({ resetForm: true });
+  renderTaskLists();
+  setTaskFormPanelOpen(false);
+  showTaskFormStatus("Изменения сохранены");
+}
+
 function handleTaskSubmit(event) {
   event.preventDefault();
   hideTaskFormStatus();
@@ -850,6 +970,11 @@ function handleTaskSubmit(event) {
   const { isValid, values } = validateTaskForm();
 
   if (!isValid) {
+    return;
+  }
+
+  if (editingTaskId !== null) {
+    saveEditedTask(values);
     return;
   }
 
@@ -915,6 +1040,13 @@ function setFiltersPanelOpen(isOpen) {
 }
 
 function toggleTaskFormPanel() {
+  if (editingTaskId !== null) {
+    cancelTaskEditing({ closePanel: false });
+    setTaskFormPanelOpen(true);
+    elements.taskTitleInput.focus();
+    return;
+  }
+
   const shouldOpen = elements.taskFormPanel.hidden;
 
   if (shouldOpen) {
@@ -950,7 +1082,11 @@ function handleDocumentKeydown(event) {
   let focusTarget = null;
 
   if (!elements.taskFormPanel.hidden) {
-    setTaskFormPanelOpen(false);
+    if (editingTaskId !== null) {
+      cancelTaskEditing();
+    } else {
+      setTaskFormPanelOpen(false);
+    }
     focusTarget = elements.taskFormToggle;
   }
 
@@ -1029,6 +1165,7 @@ function initializeApp() {
   elements.nameInput.addEventListener("input", clearNameError);
   elements.settingsButton.addEventListener("click", toggleSettingsPanel);
   elements.taskFormToggle.addEventListener("click", toggleTaskFormPanel);
+  elements.taskFormCancel.addEventListener("click", () => cancelTaskEditing());
   elements.filtersToggle.addEventListener("click", toggleFiltersPanel);
   elements.filtersResetButton.addEventListener("click", resetFilters);
   elements.activeListToggle.addEventListener("click", toggleActiveTasks);
