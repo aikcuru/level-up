@@ -815,6 +815,10 @@ progress::-moz-progress-bar {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
   progress::-webkit-progress-value {
     transition: none;
   }
@@ -1249,7 +1253,7 @@ progress::-moz-progress-bar {
   margin: 0;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 767.98px) {
   .page-shell {
     width: min(100% - 24px, var(--content-width));
   }
