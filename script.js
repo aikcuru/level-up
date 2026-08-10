@@ -1,12 +1,11 @@
 "use strict";
 
-const STORAGE_KEY = "levelUpState";
-const STATE_VERSION = 1;
 const XP_PER_LEVEL = 100;
+const API_BASE_PATH = "/api/v1";
+const APP_TIME_ZONE = "Asia/Irkutsk";
 const FILTER_ALL = "all";
 const FILTER_WITHOUT_SUBJECT = "__without_subject__";
 const FILTER_SUBJECT_PREFIX = "subject:";
-const DEFAULT_SUBJECTS = Object.freeze(["Русский язык", "Математика"]);
 const DIRECTIONS = Object.freeze([
   "Школа",
   "ЕГЭ",
@@ -80,13 +79,23 @@ const ADDITIONAL_SUBJECT_COLORS = Object.freeze([
   "#D7E0EE",
   "#E4D8C7",
 ]);
+const TODAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: APP_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 
 const elements = {
-  welcomePanel: document.querySelector("#welcome-panel"),
-  nameForm: document.querySelector("#name-form"),
-  nameInput: document.querySelector("#name-input"),
-  nameError: document.querySelector("#name-error"),
+  authLoading: document.querySelector("#auth-loading"),
+  loginPanel: document.querySelector("#login-panel"),
+  loginForm: document.querySelector("#login-form"),
+  loginInput: document.querySelector("#login-input"),
+  passwordInput: document.querySelector("#password-input"),
+  loginError: document.querySelector("#login-error"),
+  loginSubmit: document.querySelector("#login-submit"),
   mainInterface: document.querySelector("#main-interface"),
+  logoutButton: document.querySelector("#logout-button"),
   settingsButton: document.querySelector("#settings-button"),
   settingsPanel: document.querySelector("#settings-panel"),
   subjectForm: document.querySelector("#subject-form"),
@@ -144,10 +153,14 @@ const elements = {
   calendarTaskTooltip: document.querySelector("#calendar-task-tooltip"),
 };
 
-let appState = createInitialState();
+let appState = createEmptyState();
+let csrfToken = null;
+let currentUser = null;
+let authRequestPending = false;
+let mutationPending = false;
 let activeTasksExpanded = true;
 let editingTaskId = null;
-let editingDeadlineAtOpen = null;
+let editingTaskVersionAtOpen = null;
 const initialCalendarToday = getLocalTodayParts();
 let calendarYear = initialCalendarToday.year;
 let calendarMonth = initialCalendarToday.month;
@@ -156,16 +169,17 @@ let calendarTooltipTrigger = null;
 let calendarTooltipTaskId = null;
 let calendarTooltipCloseTimer = null;
 
-function createInitialState(name = "") {
+function createEmptyState() {
   return {
-    version: STATE_VERSION,
     profile: {
-      name,
+      userId: "",
+      displayName: "",
       totalXp: 0,
       level: 1,
     },
-    additionalSubjects: [],
+    subjects: [],
     tasks: [],
+    syncVersion: 0,
   };
 }
 
@@ -177,39 +191,16 @@ function normalizeForComparison(value) {
   return value.trim().toLocaleLowerCase("ru-RU");
 }
 
-function getAllSubjects(additionalSubjects = appState.additionalSubjects) {
-  return [...DEFAULT_SUBJECTS, ...additionalSubjects];
+function getAllSubjects() {
+  return appState.subjects;
 }
 
-function getTotalXpFromTasks(tasks) {
-  const totalXp = tasks.reduce(
-    (sum, task) => sum + (task.status === "completed" ? task.xpReward : 0),
-    0,
-  );
-
-  return Math.max(0, totalXp);
-}
-
-function getLevelFromTotalXp(totalXp) {
-  return Math.floor(totalXp / XP_PER_LEVEL) + 1;
-}
-
-function reconcileProfileWithTasks(state) {
-  const totalXp = getTotalXpFromTasks(state.tasks);
-  const level = getLevelFromTotalXp(totalXp);
-
-  if (state.profile.totalXp === totalXp && state.profile.level === level) {
-    return state;
+function getSubjectById(subjectId) {
+  if (subjectId === null) {
+    return null;
   }
 
-  return {
-    ...state,
-    profile: {
-      ...state.profile,
-      totalXp,
-      level,
-    },
-  };
+  return appState.subjects.find((subject) => subject.id === subjectId) ?? null;
 }
 
 function parseCalendarDate(value) {
@@ -249,10 +240,14 @@ function formatCalendarDate(value) {
 }
 
 function getLocalTodayParts(date = new Date()) {
+  const parts = Object.fromEntries(
+    TODAY_FORMATTER.formatToParts(date).map(({ type, value }) => [type, value]),
+  );
+
   return {
-    year: date.getFullYear(),
-    month: date.getMonth() + 1,
-    day: date.getDate(),
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
   };
 }
 
@@ -316,12 +311,12 @@ function formatFullCalendarDate({ year, month, day }) {
   return `${day} ${CALENDAR_MONTH_NAMES_GENITIVE[month - 1]} ${year} года`;
 }
 
-function getSubjectLabel(subject) {
-  return subject ?? "Без предмета";
+function getSubjectLabel(subjectId) {
+  return getSubjectById(subjectId)?.name ?? "Без предмета";
 }
 
-function getSubjectColor(subject) {
-  const normalizedSubject = normalizeForComparison(getSubjectLabel(subject));
+function getSubjectColor(subjectId) {
+  const normalizedSubject = normalizeForComparison(getSubjectLabel(subjectId));
   const baseColor = BASE_SUBJECT_COLORS[normalizedSubject];
 
   if (baseColor) {
@@ -357,11 +352,11 @@ function getLegendSubjects(tasks) {
   const subjectsByNormalizedName = new Map();
 
   for (const task of tasks) {
-    const label = getSubjectLabel(task.subject);
+    const label = getSubjectLabel(task.subjectId);
     const normalizedLabel = normalizeForComparison(label);
 
     if (!subjectsByNormalizedName.has(normalizedLabel)) {
-      subjectsByNormalizedName.set(normalizedLabel, task.subject);
+      subjectsByNormalizedName.set(normalizedLabel, task.subjectId);
     }
   }
 
@@ -525,7 +520,7 @@ function createCalendarTooltipContent(task) {
   details.className = "calendar-task-tooltip__details";
   details.append(
     createTaskDetail("Направление", task.direction),
-    createTaskDetail("Предмет", getSubjectLabel(task.subject)),
+    createTaskDetail("Предмет", getSubjectLabel(task.subjectId)),
     createTaskDetail("Дедлайн", formatCalendarDate(task.currentDeadline)),
     createTaskDetail(
       "Срок",
@@ -611,13 +606,13 @@ function handleCalendarViewportChange() {
 function createCalendarTaskPill(task, todayKey) {
   const pill = document.createElement("span");
   const title = document.createElement("span");
-  const subjectLabel = getSubjectLabel(task.subject);
+  const subjectLabel = getSubjectLabel(task.subjectId);
   const isOverdue = isTaskOverdueForCalendar(task, todayKey);
 
   pill.className = "calendar-task";
   pill.dataset.taskId = task.id;
   pill.tabIndex = isCalendarDesktopView() ? 0 : -1;
-  pill.style.backgroundColor = getSubjectColor(task.subject);
+  pill.style.backgroundColor = getSubjectColor(task.subjectId);
   title.className = "calendar-task__title";
   title.textContent = task.title;
 
@@ -750,12 +745,12 @@ function createCalendarDayOverviewTask(task, todayParts) {
   item.className = "calendar-day-task";
   heading.className = "calendar-day-task__heading";
   marker.className = "calendar-day-task__marker";
-  marker.style.backgroundColor = getSubjectColor(task.subject);
+  marker.style.backgroundColor = getSubjectColor(task.subjectId);
   marker.setAttribute("aria-hidden", "true");
   title.className = "calendar-day-task__title";
   title.textContent = task.title;
   details.className = "calendar-day-task__details";
-  details.textContent = `${task.direction} · ${getSubjectLabel(task.subject)} · ${deadlineState.message}`;
+  details.textContent = `${task.direction} · ${getSubjectLabel(task.subjectId)} · ${deadlineState.message}`;
   heading.append(marker, title);
   item.append(heading, details);
 
@@ -897,153 +892,173 @@ function getDeadlineState(task, todayParts = getLocalTodayParts()) {
   };
 }
 
-function hasValidAdditionalSubjects(additionalSubjects) {
-  if (!Array.isArray(additionalSubjects)) {
-    return false;
+class ApiError extends Error {
+  constructor(status, data, message = "Ошибка запроса") {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
+function getApiErrorMessage(error, fallback) {
+  if (!(error instanceof ApiError)) {
+    return fallback;
   }
 
-  const normalizedNames = new Set(DEFAULT_SUBJECTS.map(normalizeForComparison));
+  if (error.status === 0) {
+    return "Не удалось связаться с сервером. Проверьте соединение и повторите попытку.";
+  }
 
-  return additionalSubjects.every((subject) => {
-    if (typeof subject !== "string" || subject.trim().length === 0) {
-      return false;
+  if (error.status === 401) {
+    return "Сессия завершена. Войдите снова.";
+  }
+
+  if (error.status === 403) {
+    return "Сервер отклонил запрос. Обновите страницу и повторите попытку.";
+  }
+
+  if (error.status === 409) {
+    return "Данные изменились в другом месте. Загружена актуальная версия.";
+  }
+
+  if (error.status === 422) {
+    return "Проверьте заполненные данные.";
+  }
+
+  return fallback;
+}
+
+function requireReauthentication() {
+  csrfToken = null;
+  currentUser = null;
+  showLogin("Сессия завершена. Войдите снова, чтобы продолжить.");
+}
+
+async function apiRequest(
+  path,
+  { method = "GET", body, withCsrf = false, handleUnauthorized = true } = {},
+) {
+  const headers = { Accept: "application/json" };
+
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  if (withCsrf) {
+    if (!csrfToken) {
+      requireReauthentication();
+      throw new ApiError(401, null, "Отсутствует CSRF-токен");
     }
 
-    const normalizedSubject = normalizeForComparison(subject);
+    headers["X-CSRF-Token"] = csrfToken;
+  }
 
-    if (normalizedNames.has(normalizedSubject)) {
-      return false;
+  let response;
+
+  try {
+    response = await fetch(`${API_BASE_PATH}${path}`, {
+      method,
+      headers,
+      credentials: "same-origin",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new ApiError(0, null, error.message);
+  }
+
+  let data = null;
+
+  if (response.status !== 204) {
+    const contentType = response.headers.get("content-type") ?? "";
+
+    data = contentType.includes("application/json")
+      ? await response.json().catch(() => null)
+      : await response.text().catch(() => "");
+  }
+
+  if (!response.ok) {
+    if (response.status === 401 && handleUnauthorized) {
+      requireReauthentication();
     }
 
-    normalizedNames.add(normalizedSubject);
-    return true;
-  });
+    throw new ApiError(response.status, data);
+  }
+
+  return data;
 }
 
-function isValidTask(task, availableSubjects) {
-  if (!isPlainObject(task)) {
-    return false;
+function adaptServerState(value) {
+  const profile = value?.profile;
+  const subjectsAreValid =
+    Array.isArray(value?.subjects) &&
+    value.subjects.every(
+      (subject) =>
+        isPlainObject(subject) &&
+        typeof subject.id === "string" &&
+        typeof subject.name === "string" &&
+        typeof subject.normalizedName === "string" &&
+        typeof subject.isSystem === "boolean" &&
+        Number.isInteger(subject.version),
+    );
+  const subjectIds = subjectsAreValid
+    ? new Set(value.subjects.map((subject) => subject.id))
+    : new Set();
+  const tasksAreValid =
+    Array.isArray(value?.tasks) &&
+    value.tasks.every(
+      (task) =>
+        isPlainObject(task) &&
+        typeof task.id === "string" &&
+        typeof task.title === "string" &&
+        DIRECTIONS.includes(task.direction) &&
+        (task.subjectId === null || subjectIds.has(task.subjectId)) &&
+        Object.hasOwn(DIFFICULTY_REWARDS, task.difficulty) &&
+        Number.isFinite(task.xpReward) &&
+        (task.status === "active" || task.status === "completed") &&
+        isValidCalendarDate(task.originalDeadline) &&
+        isValidCalendarDate(task.currentDeadline) &&
+        Number.isInteger(task.postponementCount) &&
+        typeof task.xpAwarded === "boolean" &&
+        Number.isInteger(task.version),
+    );
+
+  if (
+    !isPlainObject(value) ||
+    !isPlainObject(profile) ||
+    typeof profile.userId !== "string" ||
+    (profile.displayName !== null && typeof profile.displayName !== "string") ||
+    !Number.isFinite(profile.totalXp) ||
+    !Number.isInteger(profile.level) ||
+    !subjectsAreValid ||
+    !tasksAreValid ||
+    !Number.isInteger(value.syncVersion)
+  ) {
+    throw new ApiError(0, value, "Сервер вернул некорректное состояние");
   }
 
-  const isKnownSubject =
-    typeof task.subject === "string" && availableSubjects.includes(task.subject);
-  const subjectIsValid = REQUIRED_SUBJECT_DIRECTIONS.has(task.direction)
-    ? isKnownSubject
-    : task.subject === null || isKnownSubject;
-  const difficultyIsValid = Object.hasOwn(
-    DIFFICULTY_REWARDS,
-    task.difficulty,
-  );
-  const statusIsValid = task.status === "active" || task.status === "completed";
-  const awardedStateIsValid =
-    (task.status === "active" && task.xpAwarded === false) ||
-    (task.status === "completed" && task.xpAwarded === true);
-
-  return (
-    typeof task.id === "string" &&
-    task.id.length > 0 &&
-    typeof task.title === "string" &&
-    task.title.trim().length > 0 &&
-    DIRECTIONS.includes(task.direction) &&
-    subjectIsValid &&
-    difficultyIsValid &&
-    task.xpReward === DIFFICULTY_REWARDS[task.difficulty] &&
-    statusIsValid &&
-    isValidCalendarDate(task.originalDeadline) &&
-    isValidCalendarDate(task.currentDeadline) &&
-    Number.isInteger(task.postponementCount) &&
-    task.postponementCount >= 0 &&
-    awardedStateIsValid &&
-    typeof task.createdAt === "string" &&
-    !Number.isNaN(Date.parse(task.createdAt))
-  );
+  return {
+    profile: { ...profile },
+    subjects: value.subjects.map((subject) => ({ ...subject })),
+    tasks: value.tasks.map((task) => ({ ...task })),
+    syncVersion: value.syncVersion,
+  };
 }
 
-function isValidStoredState(value) {
-  if (!isPlainObject(value) || value.version !== STATE_VERSION) {
-    return false;
-  }
-
-  const { profile, additionalSubjects, tasks } = value;
-
-  if (!isPlainObject(profile)) {
-    return false;
-  }
-
-  const hasValidName =
-    typeof profile.name === "string" && profile.name.trim().length > 0;
-  const hasValidTotalXp = Number.isFinite(profile.totalXp);
-  const hasValidLevel = Number.isInteger(profile.level);
-  const hasValidSubjects = hasValidAdditionalSubjects(additionalSubjects);
-  const availableSubjects = hasValidSubjects
-    ? getAllSubjects(additionalSubjects)
-    : [];
-  const hasValidTasks =
-    Array.isArray(tasks) &&
-    tasks.every((task) => isValidTask(task, availableSubjects)) &&
-    new Set(tasks.map((task) => task.id)).size === tasks.length;
-
-  return (
-    hasValidName &&
-    hasValidTotalXp &&
-    hasValidLevel &&
-    hasValidSubjects &&
-    hasValidTasks
-  );
+async function loadServerState() {
+  appState = adaptServerState(await apiRequest("/state"));
+  renderAllServerState();
+  return appState;
 }
 
-function clearStoredState() {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch (error) {
-    console.error("Не удалось очистить повреждённое состояние.", error);
-  }
-}
+function setMutationPending(isPending) {
+  mutationPending = isPending;
+  elements.subjectForm.querySelector('button[type="submit"]').disabled = isPending;
+  elements.taskFormSubmit.disabled = isPending;
+  elements.taskFormCancel.disabled = isPending;
 
-function loadState() {
-  let rawState;
-
-  try {
-    rawState = localStorage.getItem(STORAGE_KEY);
-  } catch (error) {
-    console.error("Не удалось прочитать сохранённое состояние.", error);
-    return createInitialState();
-  }
-
-  if (rawState === null) {
-    return createInitialState();
-  }
-
-  try {
-    const parsedState = JSON.parse(rawState);
-
-    if (!isValidStoredState(parsedState)) {
-      clearStoredState();
-      return createInitialState();
-    }
-
-    parsedState.profile.name = parsedState.profile.name.trim();
-
-    const reconciledState = reconcileProfileWithTasks(parsedState);
-
-    if (reconciledState !== parsedState) {
-      saveState(reconciledState);
-    }
-
-    return reconciledState;
-  } catch (error) {
-    clearStoredState();
-    return createInitialState();
-  }
-}
-
-function saveState(state) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    return true;
-  } catch (error) {
-    console.error("Не удалось сохранить состояние.", error);
-    return false;
+  for (const button of document.querySelectorAll(".task-card__action-button")) {
+    button.disabled = isPending;
   }
 }
 
@@ -1057,16 +1072,18 @@ function getProfileProgress(profile) {
   };
 }
 
-function showNameError(message) {
-  elements.nameError.textContent = message;
-  elements.nameError.hidden = false;
-  elements.nameInput.setAttribute("aria-invalid", "true");
+function showLoginError(message) {
+  elements.loginError.textContent = message;
+  elements.loginError.hidden = false;
+  elements.loginInput.setAttribute("aria-invalid", "true");
+  elements.passwordInput.setAttribute("aria-invalid", "true");
 }
 
-function clearNameError() {
-  elements.nameError.textContent = "";
-  elements.nameError.hidden = true;
-  elements.nameInput.removeAttribute("aria-invalid");
+function clearLoginError() {
+  elements.loginError.textContent = "";
+  elements.loginError.hidden = true;
+  elements.loginInput.removeAttribute("aria-invalid");
+  elements.passwordInput.removeAttribute("aria-invalid");
 }
 
 function showFieldError(field, errorElement, message) {
@@ -1148,7 +1165,7 @@ function createTaskCard(task, todayParts) {
 
   details.append(
     createTaskDetail("Направление", task.direction),
-    createTaskDetail("Предмет", task.subject ?? "Без предмета"),
+    createTaskDetail("Предмет", getSubjectLabel(task.subjectId)),
     createTaskDetail("Дедлайн", formatCalendarDate(task.currentDeadline)),
     createTaskDetail(
       "Срок",
@@ -1176,11 +1193,13 @@ function createTaskCard(task, todayParts) {
     completeButton.className =
       "task-card__action-button task-card__complete-button";
     completeButton.type = "button";
+    completeButton.disabled = mutationPending;
     completeButton.textContent = "Выполнено";
     completeButton.addEventListener("click", () => completeTask(task.id));
     editButton.className =
       "task-card__action-button task-card__edit-button";
     editButton.type = "button";
+    editButton.disabled = mutationPending;
     editButton.textContent = "Редактировать";
     editButton.addEventListener("click", () => startEditingTask(task.id));
     actions.append(completeButton, editButton);
@@ -1190,6 +1209,7 @@ function createTaskCard(task, todayParts) {
 
   deleteButton.className = "task-card__action-button task-card__delete-button";
   deleteButton.type = "button";
+  deleteButton.disabled = mutationPending;
   deleteButton.textContent = "Удалить";
   deleteButton.addEventListener("click", () => deleteTask(task.id));
   actions.append(deleteButton);
@@ -1216,9 +1236,9 @@ function taskMatchesFilters(
     directionFilter === FILTER_ALL || task.direction === directionFilter;
   const matchesSubject =
     subjectFilter === FILTER_ALL ||
-    (subjectFilter === FILTER_WITHOUT_SUBJECT && task.subject === null) ||
+    (subjectFilter === FILTER_WITHOUT_SUBJECT && task.subjectId === null) ||
     (subjectFilter.startsWith(FILTER_SUBJECT_PREFIX) &&
-      task.subject === subjectFilter.slice(FILTER_SUBJECT_PREFIX.length));
+      task.subjectId === subjectFilter.slice(FILTER_SUBJECT_PREFIX.length));
 
   return matchesStatus && matchesDirection && matchesSubject;
 }
@@ -1295,42 +1315,43 @@ function closeEditingForTask(taskId) {
   hideTaskFormStatus();
 }
 
-function completeTask(taskId) {
-  const taskIndex = appState.tasks.findIndex((task) => task.id === taskId);
-
-  if (taskIndex < 0) {
+async function completeTask(taskId) {
+  if (mutationPending) {
     return false;
   }
 
-  const task = appState.tasks[taskIndex];
+  const task = appState.tasks.find((candidate) => candidate.id === taskId);
 
-  if (task.status !== "active" || task.xpAwarded !== false) {
+  if (!task || task.status !== "active" || task.xpAwarded !== false) {
     return false;
   }
 
-  const completedTask = {
-    ...task,
-    status: "completed",
-    xpAwarded: true,
-  };
-  const updatedTasks = [...appState.tasks];
+  setMutationPending(true);
+  hideTaskFormStatus();
 
-  updatedTasks[taskIndex] = completedTask;
+  try {
+    await apiRequest(`/tasks/${encodeURIComponent(task.id)}/complete`, {
+      method: "POST",
+      body: { version: task.version },
+      withCsrf: true,
+    });
+    closeEditingForTask(taskId);
+    await loadServerState();
+    return true;
+  } catch (error) {
+    if (error.status === 409) {
+      await reloadAfterConflict();
+    } else if (error.status !== 401) {
+      showTaskFormStatus(
+        getApiErrorMessage(error, "Не удалось выполнить задачу"),
+        true,
+      );
+    }
 
-  const nextState = reconcileProfileWithTasks({
-    ...appState,
-    tasks: updatedTasks,
-  });
-
-  if (!saveState(nextState)) {
     return false;
+  } finally {
+    setMutationPending(false);
   }
-
-  appState = nextState;
-  closeEditingForTask(taskId);
-  renderProfile();
-  renderTaskLists();
-  return true;
 }
 
 function getDeleteConfirmationMessage(task) {
@@ -1341,34 +1362,43 @@ function getDeleteConfirmationMessage(task) {
   return `Удалить задачу «${task.title}»?`;
 }
 
-function deleteTask(taskId) {
-  const taskIndex = appState.tasks.findIndex((task) => task.id === taskId);
-
-  if (taskIndex < 0) {
+async function deleteTask(taskId) {
+  if (mutationPending) {
     return false;
   }
 
-  const task = appState.tasks[taskIndex];
+  const task = appState.tasks.find((candidate) => candidate.id === taskId);
 
-  if (!window.confirm(getDeleteConfirmationMessage(task))) {
+  if (!task || !window.confirm(getDeleteConfirmationMessage(task))) {
     return false;
   }
 
-  const updatedTasks = appState.tasks.filter((candidate) => candidate.id !== taskId);
-  const nextState = reconcileProfileWithTasks({
-    ...appState,
-    tasks: updatedTasks,
-  });
+  setMutationPending(true);
+  hideTaskFormStatus();
 
-  if (!saveState(nextState)) {
+  try {
+    await apiRequest(`/tasks/${encodeURIComponent(task.id)}`, {
+      method: "DELETE",
+      body: { version: task.version },
+      withCsrf: true,
+    });
+    closeEditingForTask(taskId);
+    await loadServerState();
+    return true;
+  } catch (error) {
+    if (error.status === 409) {
+      await reloadAfterConflict();
+    } else if (error.status !== 401) {
+      showTaskFormStatus(
+        getApiErrorMessage(error, "Не удалось удалить задачу"),
+        true,
+      );
+    }
+
     return false;
+  } finally {
+    setMutationPending(false);
   }
-
-  appState = nextState;
-  closeEditingForTask(taskId);
-  renderProfile();
-  renderTaskLists();
-  return true;
 }
 
 function renderTaskLists() {
@@ -1430,7 +1460,7 @@ function renderSubjects() {
 
   for (const subject of getAllSubjects()) {
     const item = document.createElement("li");
-    item.textContent = subject;
+    item.textContent = subject.name;
     fragment.append(item);
   }
 
@@ -1445,7 +1475,9 @@ function renderSubjectFilterOptions() {
   ];
 
   for (const subject of getAllSubjects()) {
-    options.push(createOption(`${FILTER_SUBJECT_PREFIX}${subject}`, subject));
+    options.push(
+      createOption(`${FILTER_SUBJECT_PREFIX}${subject.id}`, subject.name),
+    );
   }
 
   elements.subjectFilter.replaceChildren(...options);
@@ -1453,7 +1485,9 @@ function renderSubjectFilterOptions() {
   const availableValues = new Set([
     FILTER_ALL,
     FILTER_WITHOUT_SUBJECT,
-    ...getAllSubjects().map((subject) => `${FILTER_SUBJECT_PREFIX}${subject}`),
+    ...getAllSubjects().map(
+      (subject) => `${FILTER_SUBJECT_PREFIX}${subject.id}`,
+    ),
   ]);
   elements.subjectFilter.value = availableValues.has(previousValue)
     ? previousValue
@@ -1472,7 +1506,7 @@ function updateSubjectField() {
   const options = [createOption("", firstOptionLabel)];
 
   for (const subject of getAllSubjects()) {
-    options.push(createOption(subject, subject));
+    options.push(createOption(subject.id, subject.name));
   }
 
   elements.taskSubjectSelect.replaceChildren(...options);
@@ -1480,7 +1514,7 @@ function updateSubjectField() {
   elements.taskSubjectSelect.required = subjectIsRequired;
   elements.subjectRequiredMarker.hidden = !subjectIsRequired;
 
-  if (directionIsSelected && getAllSubjects().includes(previousSubject)) {
+  if (directionIsSelected && getSubjectById(previousSubject)) {
     elements.taskSubjectSelect.value = previousSubject;
   }
 
@@ -1520,7 +1554,7 @@ function showTaskFormStatus(message, isError = false) {
 
 function setTaskFormCreateMode({ resetForm = false } = {}) {
   editingTaskId = null;
-  editingDeadlineAtOpen = null;
+  editingTaskVersionAtOpen = null;
   elements.taskFormHeading.textContent = "Новая задача";
   elements.taskFormContext.textContent = "";
   elements.taskFormContext.hidden = true;
@@ -1554,7 +1588,7 @@ function startEditingTask(taskId) {
   }
 
   editingTaskId = task.id;
-  editingDeadlineAtOpen = task.currentDeadline;
+  editingTaskVersionAtOpen = task.version;
   clearTaskErrors();
   hideTaskFormStatus();
   elements.taskForm.reset();
@@ -1566,7 +1600,7 @@ function startEditingTask(taskId) {
   elements.taskTitleInput.value = task.title;
   elements.taskDirectionSelect.value = task.direction;
   updateSubjectField();
-  elements.taskSubjectSelect.value = task.subject ?? "";
+  elements.taskSubjectSelect.value = task.subjectId ?? "";
   elements.taskDifficultySelect.value = task.difficulty;
   elements.taskDeadlineInput.value = task.currentDeadline;
   updateDifficultyPreview();
@@ -1575,19 +1609,12 @@ function startEditingTask(taskId) {
   elements.taskTitleInput.focus();
 }
 
-function createTaskId() {
-  if (
-    globalThis.crypto &&
-    typeof globalThis.crypto.randomUUID === "function"
-  ) {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function handleSubjectSubmit(event) {
+async function handleSubjectSubmit(event) {
   event.preventDefault();
+
+  if (mutationPending) {
+    return;
+  }
 
   const subjectName = elements.subjectNameInput.value.trim();
   clearFieldError(elements.subjectNameInput, elements.subjectNameError);
@@ -1603,7 +1630,7 @@ function handleSubjectSubmit(event) {
 
   const normalizedName = normalizeForComparison(subjectName);
   const subjectExists = getAllSubjects().some(
-    (subject) => normalizeForComparison(subject) === normalizedName,
+    (subject) => normalizeForComparison(subject.name) === normalizedName,
   );
 
   if (subjectExists) {
@@ -1615,26 +1642,27 @@ function handleSubjectSubmit(event) {
     return;
   }
 
-  const nextState = {
-    ...appState,
-    additionalSubjects: [...appState.additionalSubjects, subjectName],
-  };
+  setMutationPending(true);
 
-  if (!saveState(nextState)) {
-    showFieldError(
-      elements.subjectNameInput,
-      elements.subjectNameError,
-      "Не удалось сохранить предмет",
-    );
-    return;
+  try {
+    await apiRequest("/subjects", {
+      method: "POST",
+      body: { name: subjectName },
+      withCsrf: true,
+    });
+    await loadServerState();
+    elements.subjectNameInput.value = "";
+  } catch (error) {
+    if (error.status !== 401) {
+      showFieldError(
+        elements.subjectNameInput,
+        elements.subjectNameError,
+        getApiErrorMessage(error, "Не удалось сохранить предмет"),
+      );
+    }
+  } finally {
+    setMutationPending(false);
   }
-
-  appState = nextState;
-  elements.subjectNameInput.value = "";
-  renderSubjects();
-  renderSubjectFilterOptions();
-  updateSubjectField();
-  renderTaskLists();
 }
 
 function validateTaskForm() {
@@ -1672,7 +1700,7 @@ function validateTaskForm() {
       "Выберите предмет",
     );
     isValid = false;
-  } else if (subject.length > 0 && !getAllSubjects().includes(subject)) {
+  } else if (subject.length > 0 && !getSubjectById(subject)) {
     showFieldError(
       elements.taskSubjectSelect,
       elements.taskSubjectError,
@@ -1705,52 +1733,79 @@ function validateTaskForm() {
   };
 }
 
-function saveEditedTask(values) {
-  const taskIndex = appState.tasks.findIndex(
+async function reloadAfterConflict() {
+  await loadServerState();
+  setTaskFormCreateMode({ resetForm: true });
+  setTaskFormPanelOpen(false);
+  showTaskFormStatus(
+    "Задача изменилась в другом месте. Актуальные данные загружены; откройте редактирование снова.",
+    true,
+  );
+}
+
+async function saveEditedTask(values) {
+  const currentTask = appState.tasks.find(
     (task) => task.id === editingTaskId && task.status === "active",
   );
 
-  if (taskIndex < 0 || editingDeadlineAtOpen === null) {
+  if (!currentTask || !Number.isInteger(editingTaskVersionAtOpen)) {
     showTaskFormStatus("Не удалось найти активную задачу", true);
     return;
   }
 
-  const currentTask = appState.tasks[taskIndex];
-  const deadlineWasPostponed = values.deadline > editingDeadlineAtOpen;
-  const updatedTask = {
-    ...currentTask,
+  const nextSubjectId = values.subject || null;
+  const payload = { version: editingTaskVersionAtOpen };
+  const changedFields = {
     title: values.title,
     direction: values.direction,
-    subject: values.subject || null,
+    subjectId: nextSubjectId,
     difficulty: values.difficulty,
-    xpReward: DIFFICULTY_REWARDS[values.difficulty],
-    currentDeadline: values.deadline,
-    postponementCount:
-      currentTask.postponementCount + (deadlineWasPostponed ? 1 : 0),
+    deadline: values.deadline,
   };
-  const updatedTasks = [...appState.tasks];
 
-  updatedTasks[taskIndex] = updatedTask;
+  for (const [field, value] of Object.entries(changedFields)) {
+    const currentValue = field === "deadline"
+      ? currentTask.currentDeadline
+      : currentTask[field];
 
-  const nextState = reconcileProfileWithTasks({
-    ...appState,
-    tasks: updatedTasks,
-  });
+    if (value !== currentValue) {
+      payload[field] = value;
+    }
+  }
 
-  if (!saveState(nextState)) {
-    showTaskFormStatus("Не удалось сохранить изменения", true);
+  setMutationPending(true);
+
+  try {
+    await apiRequest(`/tasks/${encodeURIComponent(currentTask.id)}`, {
+      method: "PATCH",
+      body: payload,
+      withCsrf: true,
+    });
+    await loadServerState();
+    setTaskFormCreateMode({ resetForm: true });
+    setTaskFormPanelOpen(false);
+    showTaskFormStatus("Изменения сохранены");
+  } catch (error) {
+    if (error.status === 409) {
+      await reloadAfterConflict();
+    } else if (error.status !== 401) {
+      showTaskFormStatus(
+        getApiErrorMessage(error, "Не удалось сохранить изменения"),
+        true,
+      );
+    }
+  } finally {
+    setMutationPending(false);
+  }
+}
+
+async function handleTaskSubmit(event) {
+  event.preventDefault();
+
+  if (mutationPending) {
     return;
   }
 
-  appState = nextState;
-  setTaskFormCreateMode({ resetForm: true });
-  renderTaskLists();
-  setTaskFormPanelOpen(false);
-  showTaskFormStatus("Изменения сохранены");
-}
-
-function handleTaskSubmit(event) {
-  event.preventDefault();
   hideTaskFormStatus();
 
   const { isValid, values } = validateTaskForm();
@@ -1760,48 +1815,43 @@ function handleTaskSubmit(event) {
   }
 
   if (editingTaskId !== null) {
-    saveEditedTask(values);
+    await saveEditedTask(values);
     return;
   }
 
-  let id;
-
-  do {
-    id = createTaskId();
-  } while (appState.tasks.some((task) => task.id === id));
-
-  const task = {
-    id,
+  const payload = {
     title: values.title,
     direction: values.direction,
-    subject: values.subject || null,
+    subjectId: values.subject || null,
     difficulty: values.difficulty,
-    xpReward: DIFFICULTY_REWARDS[values.difficulty],
-    status: "active",
-    originalDeadline: values.deadline,
-    currentDeadline: values.deadline,
-    postponementCount: 0,
-    xpAwarded: false,
-    createdAt: new Date().toISOString(),
+    deadline: values.deadline,
   };
-  const nextState = reconcileProfileWithTasks({
-    ...appState,
-    tasks: [task, ...appState.tasks],
-  });
+  setMutationPending(true);
 
-  if (!saveState(nextState)) {
-    showTaskFormStatus("Не удалось сохранить задачу", true);
-    return;
+  try {
+    await apiRequest("/tasks", {
+      method: "POST",
+      body: payload,
+      withCsrf: true,
+    });
+    await loadServerState();
+    elements.taskForm.reset();
+    updateSubjectField();
+    updateDifficultyPreview();
+    setActiveTasksExpanded(true);
+    renderTaskLists();
+    setTaskFormPanelOpen(false);
+    showTaskFormStatus("Задача сохранена");
+  } catch (error) {
+    if (error.status !== 401) {
+      showTaskFormStatus(
+        getApiErrorMessage(error, "Не удалось сохранить задачу"),
+        true,
+      );
+    }
+  } finally {
+    setMutationPending(false);
   }
-
-  appState = nextState;
-  elements.taskForm.reset();
-  updateSubjectField();
-  updateDifficultyPreview();
-  setActiveTasksExpanded(true);
-  renderTaskLists();
-  setTaskFormPanelOpen(false);
-  showTaskFormStatus("Задача сохранена");
 }
 
 function setControlledPanelOpen(button, panel, isOpen) {
@@ -1889,19 +1939,34 @@ function handleDocumentKeydown(event) {
   focusTarget?.focus();
 }
 
-function showWelcome() {
-  elements.welcomePanel.hidden = false;
+function showAuthLoading() {
+  elements.authLoading.hidden = false;
+  elements.loginPanel.hidden = true;
   elements.mainInterface.hidden = true;
   elements.settingsButton.hidden = true;
+  elements.logoutButton.hidden = true;
   setSettingsPanelOpen(false);
-  setTaskFormPanelOpen(false);
-  setFiltersPanelOpen(false);
+}
+
+function showLogin(message = "") {
+  elements.authLoading.hidden = true;
+  elements.loginPanel.hidden = false;
+  elements.mainInterface.hidden = true;
+  elements.settingsButton.hidden = true;
+  elements.logoutButton.hidden = true;
+  setSettingsPanelOpen(false);
+
+  if (message) {
+    showLoginError(message);
+  }
 }
 
 function showMainInterface() {
-  elements.welcomePanel.hidden = true;
+  elements.authLoading.hidden = true;
+  elements.loginPanel.hidden = true;
   elements.mainInterface.hidden = false;
   elements.settingsButton.hidden = false;
+  elements.logoutButton.hidden = false;
 }
 
 function renderProfile() {
@@ -1909,7 +1974,7 @@ function renderProfile() {
   const { xpInsideLevel, xpToNextLevel, progressPercent } =
     getProfileProgress(profile);
 
-  elements.profileName.textContent = profile.name;
+  elements.profileName.textContent = profile.displayName || "пользователь";
   elements.profileLevel.textContent = String(profile.level);
   elements.profileTotalXp.textContent = String(profile.totalXp);
   elements.profileXpToNext.textContent = String(xpToNextLevel);
@@ -1923,38 +1988,131 @@ function renderProfile() {
   );
 }
 
-function handleNameSubmit(event) {
-  event.preventDefault();
-
-  const normalizedName = elements.nameInput.value.trim();
-
-  if (normalizedName.length === 0) {
-    showNameError("Введите имя или никнейм");
-    elements.nameInput.focus();
-    return;
-  }
-
-  const nextState = createInitialState(normalizedName);
-
-  if (!saveState(nextState)) {
-    showNameError("Не удалось сохранить имя. Проверьте настройки браузера.");
-    return;
-  }
-
-  appState = nextState;
-  clearNameError();
+function renderAllServerState() {
   renderSubjects();
   renderSubjectFilterOptions();
   updateSubjectField();
+  updateDifficultyPreview();
   renderProfile();
   renderTaskLists();
-  showMainInterface();
 }
 
-function initializeApp() {
-  appState = loadState();
-  elements.nameForm.addEventListener("submit", handleNameSubmit);
-  elements.nameInput.addEventListener("input", clearNameError);
+function setAuthRequestPending(isPending) {
+  authRequestPending = isPending;
+  elements.loginSubmit.disabled = isPending;
+  elements.loginInput.disabled = isPending;
+  elements.passwordInput.disabled = isPending;
+  elements.logoutButton.disabled = isPending;
+}
+
+async function handleLoginSubmit(event) {
+  event.preventDefault();
+
+  if (authRequestPending) {
+    return;
+  }
+
+  const login = elements.loginInput.value.trim();
+  const password = elements.passwordInput.value;
+
+  clearLoginError();
+
+  if (!login || !password) {
+    showLoginError("Введите логин и пароль");
+    return;
+  }
+
+  setAuthRequestPending(true);
+  let credentialsAccepted = false;
+
+  try {
+    const auth = await apiRequest("/auth/login", {
+      method: "POST",
+      body: { login, password },
+      handleUnauthorized: false,
+    });
+
+    csrfToken = auth.csrfToken;
+    currentUser = auth;
+    credentialsAccepted = true;
+    await loadServerState();
+    elements.passwordInput.value = "";
+    clearLoginError();
+    showMainInterface();
+  } catch (error) {
+    const message = error.status === 401 && !credentialsAccepted
+      ? "Неверный логин или пароль"
+      : getApiErrorMessage(error, "Не удалось войти. Повторите попытку.");
+
+    showLogin(message);
+  } finally {
+    setAuthRequestPending(false);
+  }
+}
+
+async function restoreSession() {
+  showAuthLoading();
+
+  try {
+    currentUser = await apiRequest("/auth/me", {
+      handleUnauthorized: false,
+    });
+    const csrf = await apiRequest("/auth/csrf", {
+      method: "POST",
+      handleUnauthorized: false,
+    });
+
+    csrfToken = csrf.csrfToken;
+    await loadServerState();
+    showMainInterface();
+  } catch (error) {
+    csrfToken = null;
+    currentUser = null;
+    showLogin(
+      error.status === 401
+        ? ""
+        : getApiErrorMessage(error, "Не удалось проверить сессию."),
+    );
+  }
+}
+
+async function handleLogout() {
+  if (authRequestPending || mutationPending) {
+    return;
+  }
+
+  setAuthRequestPending(true);
+
+  try {
+    await apiRequest("/auth/logout", {
+      method: "POST",
+      withCsrf: true,
+    });
+    csrfToken = null;
+    currentUser = null;
+    appState = createEmptyState();
+    setTaskFormCreateMode({ resetForm: true });
+    setTaskFormPanelOpen(false);
+    setFiltersPanelOpen(false);
+    elements.loginForm.reset();
+    clearLoginError();
+    showLogin();
+  } catch (error) {
+    if (error.status !== 401) {
+      showTaskFormStatus(
+        getApiErrorMessage(error, "Не удалось выйти. Повторите попытку."),
+        true,
+      );
+    }
+  } finally {
+    setAuthRequestPending(false);
+  }
+}
+
+async function initializeApp() {
+  elements.loginForm.addEventListener("submit", handleLoginSubmit);
+  elements.loginForm.addEventListener("input", clearLoginError);
+  elements.logoutButton.addEventListener("click", handleLogout);
   elements.settingsButton.addEventListener("click", toggleSettingsPanel);
   elements.taskFormToggle.addEventListener("click", toggleTaskFormPanel);
   elements.taskFormCancel.addEventListener("click", () => cancelTaskEditing());
@@ -2011,19 +2169,9 @@ function initializeApp() {
   window.addEventListener("resize", handleCalendarViewportChange);
   window.addEventListener("scroll", positionCalendarTaskTooltip, true);
 
-  renderSubjects();
-  renderSubjectFilterOptions();
   updateSubjectField();
   updateDifficultyPreview();
-  renderTaskLists();
-
-  if (appState.profile.name) {
-    renderProfile();
-    showMainInterface();
-    return;
-  }
-
-  showWelcome();
+  await restoreSession();
 }
 
 initializeApp();

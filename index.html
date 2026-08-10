@@ -23,17 +23,27 @@
             </span>
           </a>
 
-          <button
-            class="settings-button"
-            id="settings-button"
-            type="button"
-            aria-label="Открыть настройки"
-            aria-controls="settings-panel"
-            aria-expanded="false"
-            hidden
-          >
-            <span aria-hidden="true">⚙</span>
-          </button>
+          <div class="site-header__actions">
+            <button
+              class="logout-button"
+              id="logout-button"
+              type="button"
+              hidden
+            >
+              Выйти
+            </button>
+            <button
+              class="settings-button"
+              id="settings-button"
+              type="button"
+              aria-label="Открыть настройки"
+              aria-controls="settings-panel"
+              aria-expanded="false"
+              hidden
+            >
+              <span aria-hidden="true">⚙</span>
+            </button>
+          </div>
 
           <aside
             class="settings-panel"
@@ -76,37 +86,57 @@
       </header>
 
       <main id="top">
+        <section class="welcome-card" id="auth-loading" aria-live="polite">
+          <div class="welcome-card__intro">
+            <p class="eyebrow">Level Up</p>
+            <h1>Проверяем сессию</h1>
+            <p class="welcome-card__text">Подождите немного…</p>
+          </div>
+        </section>
+
         <section
           class="welcome-card"
-          id="welcome-panel"
-          aria-labelledby="welcome-title"
+          id="login-panel"
+          aria-labelledby="login-title"
+          hidden
         >
           <div class="welcome-card__intro">
             <p class="eyebrow">Добро пожаловать</p>
-            <h1 id="welcome-title">Как тебя называть?</h1>
+            <h1 id="login-title">Вход в Level Up</h1>
             <p class="welcome-card__text">
-              Имя сохранится только в этом браузере и появится в твоём профиле.
+              Войдите в личный аккаунт, чтобы открыть планировщик.
             </p>
           </div>
 
-          <form class="name-form" id="name-form" novalidate>
+          <form class="name-form" id="login-form" novalidate>
             <div class="field">
-              <label for="name-input">Имя или никнейм</label>
+              <label for="login-input">Логин</label>
               <input
-                id="name-input"
-                name="name"
+                id="login-input"
+                name="login"
                 type="text"
-                autocomplete="nickname"
-                aria-describedby="name-hint name-error"
+                autocomplete="username"
+                aria-describedby="login-error"
                 required
               >
-              <p class="field__hint" id="name-hint">
-                Пробелы в начале и конце будут удалены.
-              </p>
-              <p class="field__error" id="name-error" role="alert" hidden></p>
             </div>
 
-            <button class="primary-button" type="submit">Начать</button>
+            <div class="field">
+              <label for="password-input">Пароль</label>
+              <input
+                id="password-input"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                aria-describedby="login-error"
+                required
+              >
+              <p class="field__error" id="login-error" role="alert" hidden></p>
+            </div>
+
+            <button class="primary-button" id="login-submit" type="submit">
+              Войти
+            </button>
           </form>
         </section>
 
@@ -488,7 +518,7 @@
       </main>
 
       <footer class="site-footer">
-        <p>Данные хранятся только в браузере на этом устройстве.</p>
+        <p>Данные сохраняются в личном аккаунте на сервере.</p>
       </footer>
     </div>
 
