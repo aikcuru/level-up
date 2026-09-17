@@ -23,6 +23,10 @@
             </span>
           </a>
 
+          <p class="site-header__greeting" id="profile-title" hidden>
+            Привет, <span id="profile-name"></span>!
+          </p>
+
           <div class="site-header__actions">
             <button
               class="logout-button"
@@ -141,26 +145,24 @@
         </section>
 
         <div id="main-interface" hidden>
-          <section class="profile-card" aria-labelledby="profile-title">
-            <div class="profile-card__heading">
-              <div>
-                <p class="eyebrow">Твой профиль</p>
-                <h1 id="profile-title">
-                  Привет, <span id="profile-name"></span>!
-                </h1>
-              </div>
-              <div class="level-badge" aria-label="Текущий уровень">
-                Уровень <strong id="profile-level">1</strong>
-              </div>
-            </div>
-
+          <section
+            class="profile-card profile-card--compact"
+            aria-labelledby="profile-summary-title"
+          >
+            <p class="eyebrow profile-card__title" id="profile-summary-title">
+              Твой прогресс
+            </p>
             <div class="profile-stats" aria-label="Прогресс пользователя">
+              <div class="stat-card">
+                <span class="stat-card__label">Уровень</span>
+                <strong class="stat-card__value" id="profile-level">1</strong>
+              </div>
               <div class="stat-card">
                 <span class="stat-card__label">Всего XP</span>
                 <strong class="stat-card__value" id="profile-total-xp">0</strong>
               </div>
               <div class="stat-card">
-                <span class="stat-card__label">До нового уровня</span>
+                <span class="stat-card__label">До уровня</span>
                 <strong class="stat-card__value">
                   <span id="profile-xp-to-next">100</span> XP
                 </strong>
@@ -183,29 +185,73 @@
             </div>
           </section>
 
-          <div class="dashboard-grid" aria-label="Основные разделы приложения">
+          <div
+            class="main-tabs"
+            role="tablist"
+            aria-label="Основные разделы приложения"
+          >
+            <button
+              class="main-tab"
+              id="main-tab-tasks"
+              type="button"
+              role="tab"
+              data-main-tab="tasks"
+              aria-controls="main-panel-tasks"
+              aria-selected="true"
+              tabindex="0"
+            >
+              Задачи
+            </button>
+            <button
+              class="main-tab"
+              id="main-tab-calendar"
+              type="button"
+              role="tab"
+              data-main-tab="calendar"
+              aria-controls="main-panel-calendar"
+              aria-selected="false"
+              tabindex="-1"
+            >
+              Календарь
+            </button>
+            <button
+              class="main-tab"
+              id="main-tab-archive"
+              type="button"
+              role="tab"
+              data-main-tab="archive"
+              aria-controls="main-panel-archive"
+              aria-selected="false"
+              tabindex="-1"
+            >
+              Архив
+            </button>
+          </div>
+
+          <p
+            class="form-status main-interface-status"
+            id="task-form-status"
+            role="status"
+            hidden
+          ></p>
+
+          <div
+            class="main-tabpanel"
+            id="main-panel-tasks"
+            role="tabpanel"
+            aria-labelledby="main-tab-tasks"
+          >
+            <div class="dashboard-grid" aria-label="Разделы задач">
             <section
               class="panel panel--full"
               id="active-tasks-section"
-              aria-labelledby="active-tasks-title"
+              aria-labelledby="tasks-title"
             >
               <div class="panel__heading">
-                <div>
-                  <p class="eyebrow">В процессе</p>
-                  <div class="panel__title-row">
-                    <h2 id="active-tasks-title">Активные задачи</h2>
-                    <button
-                      class="active-list-toggle"
-                      id="active-list-toggle"
-                      type="button"
-                      aria-controls="active-tasks-content"
-                      aria-expanded="true"
-                      aria-label="Свернуть активные задачи"
-                      hidden
-                    >
-                      −
-                    </button>
-                  </div>
+                <div class="panel__heading-title">
+                  <p class="eyebrow">Планирование</p>
+                  <span aria-hidden="true">·</span>
+                  <h2 id="tasks-title">Задачи</h2>
                 </div>
                 <div class="panel__actions">
                   <button
@@ -214,8 +260,9 @@
                     type="button"
                     aria-expanded="false"
                     aria-controls="task-form-panel"
+                    aria-label="Новая задача"
                   >
-                    + Новая задача
+                    + Новая
                   </button>
                   <button
                     class="panel-action-button"
@@ -223,8 +270,9 @@
                     type="button"
                     aria-expanded="false"
                     aria-controls="filters-panel"
+                    aria-label="Фильтры задач"
                   >
-                    Фильтры задач
+                    Фильтры
                   </button>
                 </div>
               </div>
@@ -368,8 +416,6 @@
                 </form>
               </div>
 
-              <p class="form-status" id="task-form-status" role="status" hidden></p>
-
               <div class="expandable-panel" id="filters-panel" hidden>
                 <button
                   class="filters-reset-button"
@@ -385,7 +431,6 @@
                     <select id="status-filter" name="status-filter">
                       <option value="all">Все</option>
                       <option value="active">Активные</option>
-                      <option value="completed">Выполненные</option>
                       <option value="overdue">Просроченные</option>
                     </select>
                   </div>
@@ -415,22 +460,53 @@
                 </div>
               </div>
 
-              <div id="active-tasks-content">
-                <div class="task-list" id="active-tasks-list" aria-live="polite"></div>
-                <p class="empty-note" id="active-tasks-empty">
-                  Активных задач пока нет.
-                </p>
-              </div>
+              <section
+                class="task-list-section"
+                aria-labelledby="active-tasks-title"
+              >
+                <div class="panel__title-row">
+                  <h3 id="active-tasks-title">Активные задачи</h3>
+                  <button
+                    class="active-list-toggle"
+                    id="active-list-toggle"
+                    type="button"
+                    aria-controls="active-tasks-content"
+                    aria-expanded="true"
+                    aria-label="Свернуть активные задачи"
+                    hidden
+                  >
+                    −
+                  </button>
+                </div>
+                <div id="active-tasks-content">
+                  <div class="task-list" id="active-tasks-list" aria-live="polite"></div>
+                  <p class="empty-note" id="active-tasks-empty">
+                    Активных задач пока нет.
+                  </p>
+                </div>
+              </section>
             </section>
 
+            </div>
+          </div>
+
+          <div
+            class="main-tabpanel"
+            id="main-panel-calendar"
+            role="tabpanel"
+            aria-labelledby="main-tab-calendar"
+            hidden
+          >
             <section
               class="panel panel--full calendar"
               aria-labelledby="calendar-title"
             >
               <div class="calendar__header">
-                <div>
-                  <p class="eyebrow">Месяц</p>
+                <div class="calendar__title-line">
                   <h2 id="calendar-title">Календарь</h2>
+                  <span class="calendar__title-separator" aria-hidden="true">·</span>
+                  <p class="eyebrow">Месяц</p>
+                  <span class="calendar__title-separator" aria-hidden="true">·</span>
                   <p class="calendar__month" id="calendar-month" aria-live="polite"></p>
                 </div>
 
@@ -441,7 +517,12 @@
                     type="button"
                     aria-label="Предыдущий месяц"
                   >
-                    Предыдущий месяц
+                    <span class="calendar__control-label--desktop">
+                      Предыдущий месяц
+                    </span>
+                    <span class="calendar__control-label--mobile" aria-hidden="true">
+                      ←
+                    </span>
                   </button>
                   <button
                     class="calendar__control-button"
@@ -457,7 +538,12 @@
                     type="button"
                     aria-label="Следующий месяц"
                   >
-                    Следующий месяц
+                    <span class="calendar__control-label--desktop">
+                      Следующий месяц
+                    </span>
+                    <span class="calendar__control-label--mobile" aria-hidden="true">
+                      →
+                    </span>
                   </button>
                 </div>
               </div>
@@ -501,12 +587,27 @@
               </section>
             </section>
 
+            <div
+              class="calendar-task-tooltip"
+              id="calendar-task-tooltip"
+              role="tooltip"
+              hidden
+            ></div>
+          </div>
+
+          <div
+            class="main-tabpanel"
+            id="main-panel-archive"
+            role="tabpanel"
+            aria-labelledby="main-tab-archive"
+            hidden
+          >
             <section
-              class="panel panel--full"
+              class="panel panel--full archive-panel"
               id="completed-tasks-section"
               aria-labelledby="completed-tasks-title"
             >
-              <p class="eyebrow">Готово</p>
+              <p class="eyebrow">Архив</p>
               <h2 id="completed-tasks-title">Выполненные задачи</h2>
               <div class="task-list" id="completed-tasks-list" aria-live="polite"></div>
               <p class="empty-note" id="completed-tasks-empty">
@@ -521,12 +622,5 @@
         <p>Данные сохраняются в личном аккаунте на сервере.</p>
       </footer>
     </div>
-
-    <div
-      class="calendar-task-tooltip"
-      id="calendar-task-tooltip"
-      role="tooltip"
-      hidden
-    ></div>
   </body>
 </html>

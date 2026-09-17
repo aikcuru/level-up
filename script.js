@@ -6,6 +6,7 @@ const APP_TIME_ZONE = "Asia/Irkutsk";
 const FILTER_ALL = "all";
 const FILTER_WITHOUT_SUBJECT = "__without_subject__";
 const FILTER_SUBJECT_PREFIX = "subject:";
+const MAIN_TAB_NAMES = Object.freeze(["tasks", "calendar", "archive"]);
 const DIRECTIONS = Object.freeze([
   "Школа",
   "ЕГЭ",
@@ -95,6 +96,8 @@ const elements = {
   loginError: document.querySelector("#login-error"),
   loginSubmit: document.querySelector("#login-submit"),
   mainInterface: document.querySelector("#main-interface"),
+  mainTabs: [...document.querySelectorAll("[data-main-tab]")],
+  profileGreeting: document.querySelector("#profile-title"),
   logoutButton: document.querySelector("#logout-button"),
   settingsButton: document.querySelector("#settings-button"),
   settingsPanel: document.querySelector("#settings-panel"),
@@ -158,6 +161,7 @@ let csrfToken = null;
 let currentUser = null;
 let authRequestPending = false;
 let mutationPending = false;
+let activeMainTab = "tasks";
 let activeTasksExpanded = true;
 let editingTaskId = null;
 let editingTaskVersionAtOpen = null;
@@ -225,6 +229,15 @@ function parseCalendarDate(value) {
 
 function isValidCalendarDate(value) {
   return parseCalendarDate(value) !== null;
+}
+
+function isValidServerUtcTimestamp(value) {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    !Number.isNaN(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  );
 }
 
 function formatCalendarDate(value) {
@@ -336,16 +349,38 @@ function isTaskOverdueForCalendar(task, todayKey) {
   return task.status === "active" && task.currentDeadline < todayKey;
 }
 
-function getCalendarMonthTasks() {
-  return appState.tasks.filter((task) => {
-    const deadline = parseCalendarDate(task.currentDeadline);
+function compareActiveTasks(left, right) {
+  if (left.currentDeadline !== right.currentDeadline) {
+    return left.currentDeadline < right.currentDeadline ? -1 : 1;
+  }
 
-    return (
-      task.status === "active" &&
-      deadline?.year === calendarYear &&
-      deadline.month === calendarMonth
-    );
-  });
+  if (left.createdAt !== right.createdAt) {
+    return left.createdAt > right.createdAt ? -1 : 1;
+  }
+
+  if (left.id !== right.id) {
+    return left.id > right.id ? -1 : 1;
+  }
+
+  return 0;
+}
+
+function getSortedActiveTasks(tasks) {
+  return [...tasks].sort(compareActiveTasks);
+}
+
+function getCalendarMonthTasks() {
+  return getSortedActiveTasks(
+    appState.tasks.filter((task) => {
+      const deadline = parseCalendarDate(task.currentDeadline);
+
+      return (
+        task.status === "active" &&
+        deadline?.year === calendarYear &&
+        deadline.month === calendarMonth
+      );
+    }),
+  );
 }
 
 function getLegendSubjects(tasks) {
@@ -768,10 +803,12 @@ function createCalendarDayOverviewTask(task, todayParts) {
 
 function renderCalendarDayOverview(todayParts) {
   const selectedParts = parseCalendarDate(selectedCalendarDate);
-  const selectedTasks = appState.tasks.filter(
-    (task) =>
-      task.status === "active" &&
-      task.currentDeadline === selectedCalendarDate,
+  const selectedTasks = getSortedActiveTasks(
+    appState.tasks.filter(
+      (task) =>
+        task.status === "active" &&
+        task.currentDeadline === selectedCalendarDate,
+    ),
   );
   const fragment = document.createDocumentFragment();
 
@@ -1020,7 +1057,8 @@ function adaptServerState(value) {
         isValidCalendarDate(task.currentDeadline) &&
         Number.isInteger(task.postponementCount) &&
         typeof task.xpAwarded === "boolean" &&
-        Number.isInteger(task.version),
+        Number.isInteger(task.version) &&
+        isValidServerUtcTimestamp(task.createdAt),
     );
 
   if (
@@ -1406,26 +1444,26 @@ function renderTaskLists() {
   const directionFilter = elements.directionFilter.value;
   const subjectFilter = elements.subjectFilter.value;
   const todayParts = getLocalTodayParts();
-  const filteredTasks = appState.tasks.filter((task) =>
-    taskMatchesFilters(
-      task,
-      statusFilter,
-      directionFilter,
-      subjectFilter,
-      todayParts,
+  const activeTasks = getSortedActiveTasks(
+    appState.tasks.filter(
+      (task) =>
+        task.status === "active" &&
+        taskMatchesFilters(
+          task,
+          statusFilter,
+          directionFilter,
+          subjectFilter,
+          todayParts,
+        ),
     ),
   );
-  const activeTasks = filteredTasks.filter((task) => task.status === "active");
-  const completedTasks = filteredTasks.filter(
+  const completedTasks = appState.tasks.filter(
     (task) => task.status === "completed",
   );
   const hasActiveTasks = appState.tasks.some((task) => task.status === "active");
   const hasCompletedTasks = appState.tasks.some(
     (task) => task.status === "completed",
   );
-
-  elements.completedTasksSection.hidden =
-    statusFilter === "active" || statusFilter === "overdue";
 
   renderTaskList(
     elements.activeTasksList,
@@ -1449,8 +1487,7 @@ function renderTaskLists() {
   elements.activeListToggle.hidden = !hasVisibleActiveTasks;
   updateActiveListToggle();
   elements.activeTasksContent.hidden =
-    statusFilter === "completed" ||
-    (hasVisibleActiveTasks && !activeTasksExpanded);
+    hasVisibleActiveTasks && !activeTasksExpanded;
   updateFiltersResetButton();
   renderCalendar();
 }
@@ -1910,6 +1947,58 @@ function toggleSettingsPanel() {
   setSettingsPanelOpen(!isOpen);
 }
 
+function setActiveMainTab(tabName, { moveFocus = false } = {}) {
+  if (!MAIN_TAB_NAMES.includes(tabName)) {
+    return;
+  }
+
+  activeMainTab = tabName;
+  closeCalendarTaskTooltip();
+  setSettingsPanelOpen(false);
+
+  for (const tab of elements.mainTabs) {
+    const isActive = tab.dataset.mainTab === tabName;
+    const panelId = tab.getAttribute("aria-controls");
+    const panel = document.querySelector(`#${panelId}`);
+
+    tab.setAttribute("aria-selected", String(isActive));
+    tab.tabIndex = isActive ? 0 : -1;
+    panel.hidden = !isActive;
+
+    if (isActive && moveFocus) {
+      tab.focus();
+    }
+  }
+}
+
+function handleMainTabClick(event) {
+  setActiveMainTab(event.currentTarget.dataset.mainTab);
+}
+
+function handleMainTabKeydown(event) {
+  const currentIndex = MAIN_TAB_NAMES.indexOf(
+    event.currentTarget.dataset.mainTab,
+  );
+  let nextIndex = null;
+
+  if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + MAIN_TAB_NAMES.length) % MAIN_TAB_NAMES.length;
+  } else if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % MAIN_TAB_NAMES.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = MAIN_TAB_NAMES.length - 1;
+  }
+
+  if (nextIndex === null) {
+    return;
+  }
+
+  event.preventDefault();
+  setActiveMainTab(MAIN_TAB_NAMES[nextIndex], { moveFocus: true });
+}
+
 function handleDocumentKeydown(event) {
   if (event.key !== "Escape") {
     return;
@@ -1917,18 +2006,20 @@ function handleDocumentKeydown(event) {
 
   let focusTarget = null;
 
-  if (!elements.taskFormPanel.hidden) {
-    if (editingTaskId !== null) {
-      cancelTaskEditing();
-    } else {
-      setTaskFormPanelOpen(false);
+  if (activeMainTab === "tasks") {
+    if (!elements.taskFormPanel.hidden) {
+      if (editingTaskId !== null) {
+        cancelTaskEditing();
+      } else {
+        setTaskFormPanelOpen(false);
+      }
+      focusTarget = elements.taskFormToggle;
     }
-    focusTarget = elements.taskFormToggle;
-  }
 
-  if (!elements.filtersPanel.hidden) {
-    setFiltersPanelOpen(false);
-    focusTarget ??= elements.filtersToggle;
+    if (!elements.filtersPanel.hidden) {
+      setFiltersPanelOpen(false);
+      focusTarget ??= elements.filtersToggle;
+    }
   }
 
   if (!elements.settingsPanel.hidden) {
@@ -1943,6 +2034,7 @@ function showAuthLoading() {
   elements.authLoading.hidden = false;
   elements.loginPanel.hidden = true;
   elements.mainInterface.hidden = true;
+  elements.profileGreeting.hidden = true;
   elements.settingsButton.hidden = true;
   elements.logoutButton.hidden = true;
   setSettingsPanelOpen(false);
@@ -1952,6 +2044,7 @@ function showLogin(message = "") {
   elements.authLoading.hidden = true;
   elements.loginPanel.hidden = false;
   elements.mainInterface.hidden = true;
+  elements.profileGreeting.hidden = true;
   elements.settingsButton.hidden = true;
   elements.logoutButton.hidden = true;
   setSettingsPanelOpen(false);
@@ -1965,6 +2058,7 @@ function showMainInterface() {
   elements.authLoading.hidden = true;
   elements.loginPanel.hidden = true;
   elements.mainInterface.hidden = false;
+  elements.profileGreeting.hidden = false;
   elements.settingsButton.hidden = false;
   elements.logoutButton.hidden = false;
 }
@@ -2036,6 +2130,7 @@ async function handleLoginSubmit(event) {
     currentUser = auth;
     credentialsAccepted = true;
     await loadServerState();
+    setActiveMainTab("tasks");
     elements.passwordInput.value = "";
     clearLoginError();
     showMainInterface();
@@ -2094,6 +2189,7 @@ async function handleLogout() {
     setTaskFormCreateMode({ resetForm: true });
     setTaskFormPanelOpen(false);
     setFiltersPanelOpen(false);
+    setActiveMainTab("tasks");
     elements.loginForm.reset();
     clearLoginError();
     showLogin();
@@ -2113,6 +2209,10 @@ async function initializeApp() {
   elements.loginForm.addEventListener("submit", handleLoginSubmit);
   elements.loginForm.addEventListener("input", clearLoginError);
   elements.logoutButton.addEventListener("click", handleLogout);
+  for (const tab of elements.mainTabs) {
+    tab.addEventListener("click", handleMainTabClick);
+    tab.addEventListener("keydown", handleMainTabKeydown);
+  }
   elements.settingsButton.addEventListener("click", toggleSettingsPanel);
   elements.taskFormToggle.addEventListener("click", toggleTaskFormPanel);
   elements.taskFormCancel.addEventListener("click", () => cancelTaskEditing());
@@ -2171,6 +2271,7 @@ async function initializeApp() {
 
   updateSubjectField();
   updateDifficultyPreview();
+  setActiveMainTab("tasks");
   await restoreSession();
 }
 
