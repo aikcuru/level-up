@@ -3,6 +3,8 @@
 const XP_PER_LEVEL = 100;
 const API_BASE_PATH = "/api/v1";
 const APP_TIME_ZONE = "Asia/Irkutsk";
+const MIN_CALENDAR_YEAR = 1;
+const MAX_CALENDAR_YEAR = 9999;
 const FILTER_ALL = "all";
 const FILTER_WITHOUT_SUBJECT = "__without_subject__";
 const FILTER_SUBJECT_PREFIX = "subject:";
@@ -208,6 +210,10 @@ function getSubjectById(subjectId) {
 }
 
 function parseCalendarDate(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 
   if (!match) {
@@ -219,10 +225,7 @@ function parseCalendarDate(value) {
   const month = Number(monthText);
   const day = Number(dayText);
   const isValid =
-    month >= 1 &&
-    month <= 12 &&
-    day >= 1 &&
-    day <= getDaysInMonth(year, month);
+    isValidCalendarDateParts({ year, month, day });
 
   return isValid ? { year, month, day } : null;
 }
@@ -280,6 +283,102 @@ function getCalendarDayIndex({ year, month, day }) {
   return era * 146097 + dayOfEra;
 }
 
+function getCalendarDateFromDayIndex(dayIndex) {
+  const minDayIndex = getCalendarDayIndex({
+    year: MIN_CALENDAR_YEAR,
+    month: 1,
+    day: 1,
+  });
+  const maxDayIndex = getCalendarDayIndex({
+    year: MAX_CALENDAR_YEAR,
+    month: 12,
+    day: 31,
+  });
+
+  if (
+    !Number.isSafeInteger(dayIndex) ||
+    dayIndex < minDayIndex ||
+    dayIndex > maxDayIndex
+  ) {
+    return null;
+  }
+
+  const era = Math.floor(dayIndex / 146097);
+  const dayOfEra = dayIndex - era * 146097;
+  const yearOfEra = Math.floor(
+    (dayOfEra -
+      Math.floor(dayOfEra / 1460) +
+      Math.floor(dayOfEra / 36524) -
+      Math.floor(dayOfEra / 146096)) /
+      365,
+  );
+  let year = yearOfEra + era * 400;
+  const dayOfYear =
+    dayOfEra -
+    (365 * yearOfEra +
+      Math.floor(yearOfEra / 4) -
+      Math.floor(yearOfEra / 100));
+  const adjustedMonth = Math.floor((5 * dayOfYear + 2) / 153);
+  const day =
+    dayOfYear - Math.floor((153 * adjustedMonth + 2) / 5) + 1;
+  const month = adjustedMonth + (adjustedMonth < 10 ? 3 : -9);
+
+  year += month <= 2 ? 1 : 0;
+  return { year, month, day };
+}
+
+function addCalendarDays(parts, dayDelta) {
+  if (
+    !isValidCalendarDateParts(parts) ||
+    !Number.isSafeInteger(dayDelta)
+  ) {
+    return null;
+  }
+
+  const targetDayIndex = getCalendarDayIndex(parts) + dayDelta;
+
+  return getCalendarDateFromDayIndex(targetDayIndex);
+}
+
+function addCalendarMonths(parts, monthDelta) {
+  if (
+    !isValidCalendarDateParts(parts) ||
+    !Number.isSafeInteger(monthDelta)
+  ) {
+    return null;
+  }
+
+  const targetMonthIndex =
+    (parts.year - MIN_CALENDAR_YEAR) * 12 + parts.month - 1 + monthDelta;
+  const maxMonthIndex =
+    (MAX_CALENDAR_YEAR - MIN_CALENDAR_YEAR + 1) * 12 - 1;
+
+  if (
+    !Number.isSafeInteger(targetMonthIndex) ||
+    targetMonthIndex < 0 ||
+    targetMonthIndex > maxMonthIndex
+  ) {
+    return null;
+  }
+
+  const year = Math.floor(targetMonthIndex / 12) + MIN_CALENDAR_YEAR;
+  const month = (targetMonthIndex % 12) + 1;
+  const day = Math.min(parts.day, getDaysInMonth(year, month));
+
+  return { year, month, day };
+}
+
+function getCalendarWeekMonday(parts) {
+  if (!isValidCalendarDateParts(parts)) {
+    return null;
+  }
+
+  const dayIndex = getCalendarDayIndex(parts);
+  const daysSinceMonday = ((dayIndex + 2) % 7 + 7) % 7;
+
+  return getCalendarDateFromDayIndex(dayIndex - daysSinceMonday);
+}
+
 function getDayWord(value) {
   const absoluteValue = Math.abs(value);
   const lastTwoDigits = absoluteValue % 100;
@@ -312,6 +411,26 @@ function getDaysInMonth(year, month) {
     year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
 
   return month === 2 && isLeapYear ? 29 : days[month - 1];
+}
+
+function isValidCalendarDateParts(value) {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+
+  const { year, month, day } = value;
+
+  return (
+    Number.isInteger(year) &&
+    year >= MIN_CALENDAR_YEAR &&
+    year <= MAX_CALENDAR_YEAR &&
+    Number.isInteger(month) &&
+    month >= 1 &&
+    month <= 12 &&
+    Number.isInteger(day) &&
+    day >= 1 &&
+    day <= getDaysInMonth(year, month)
+  );
 }
 
 function getMondayFirstOffset(year, month) {
