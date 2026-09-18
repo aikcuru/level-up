@@ -78,6 +78,12 @@ const CALENDAR_NAVIGATION_LABELS = Object.freeze({
 const CALENDAR_MODE_LABELS = Object.freeze({
   month: "Месяц",
   week: "Неделя",
+  day: "День",
+});
+const CALENDAR_GRID_LABELS = Object.freeze({
+  month: "Дни месяца",
+  week: "Дни недели",
+  day: "Выбранный день",
 });
 const CALENDAR_WEEKDAY_NAMES = Object.freeze([
   "Пн",
@@ -541,6 +547,10 @@ function getMondayFirstOffset(year, month) {
 
 function formatFullCalendarDate({ year, month, day }) {
   return `${day} ${CALENDAR_MONTH_NAMES_GENITIVE[month - 1]} ${year} года`;
+}
+
+function formatCalendarPeriodDate({ year, month, day }) {
+  return `${day} ${CALENDAR_MONTH_NAMES_GENITIVE[month - 1]} ${year}`;
 }
 
 function getSubjectLabel(subjectId) {
@@ -1150,12 +1160,9 @@ function createCalendarDayOverviewTask(task, todayParts) {
 
 function renderCalendarDayOverview(todayParts) {
   const selectedParts = parseCalendarDate(selectedCalendarDate);
-  const selectedTasks = getSortedActiveTasks(
-    appState.tasks.filter(
-      (task) =>
-        task.status === "active" &&
-        task.currentDeadline === selectedCalendarDate,
-    ),
+  const selectedTasks = getCalendarTasksForRange(
+    selectedCalendarDate,
+    selectedCalendarDate,
   );
   const fragment = document.createDocumentFragment();
 
@@ -1280,6 +1287,23 @@ function renderWeekCalendar(selectedParts, todayKey) {
   elements.calendarGrid.replaceChildren(fragment);
 }
 
+function renderDayCalendar(selectedParts) {
+  const dayTasks = getCalendarTasksForRange(
+    selectedCalendarDate,
+    selectedCalendarDate,
+  );
+
+  elements.calendarMonthLabel.textContent =
+    formatCalendarPeriodDate(selectedParts);
+  elements.calendarGrid.replaceChildren();
+
+  if (dayTasks.length > 0) {
+    renderCalendarLegend(dayTasks, "");
+  } else {
+    elements.calendarLegend.replaceChildren();
+  }
+}
+
 function renderCalendar() {
   closeCalendarTaskTooltip();
 
@@ -1289,7 +1313,7 @@ function renderCalendar() {
     return;
   }
 
-  if (calendarMode !== "month" && calendarMode !== "week") {
+  if (!Object.hasOwn(CALENDAR_MODE_LABELS, calendarMode)) {
     calendarMode = "month";
   }
 
@@ -1300,11 +1324,13 @@ function renderCalendar() {
   elements.calendarModeLabel.textContent = CALENDAR_MODE_LABELS[calendarMode];
   elements.calendarGrid.setAttribute(
     "aria-label",
-    calendarMode === "week" ? "Дни недели" : "Дни месяца",
+    CALENDAR_GRID_LABELS[calendarMode],
   );
   updateCalendarNavigation();
 
-  if (calendarMode === "week") {
+  if (calendarMode === "day") {
+    renderDayCalendar(selectedParts);
+  } else if (calendarMode === "week") {
     renderWeekCalendar(selectedParts, todayKey);
   } else {
     renderMonthCalendar(selectedParts, todayKey);
