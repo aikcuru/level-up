@@ -1234,6 +1234,18 @@ progress::-moz-progress-bar {
   margin-top: 7px;
 }
 
+.calendar[data-calendar-mode="week"] .calendar__month {
+  text-transform: none;
+}
+
+.calendar[data-calendar-mode="week"] .calendar__weekdays {
+  display: none;
+}
+
+.calendar[data-calendar-mode="week"] .calendar__grid {
+  gap: 8px;
+}
+
 .calendar__empty-cell {
   min-width: 0;
   min-height: 118px;
@@ -1267,6 +1279,81 @@ progress::-moz-progress-bar {
   color: inherit;
   background: transparent;
   text-align: left;
+}
+
+.calendar-week-day {
+  min-height: 170px;
+}
+
+.calendar-week-day__button {
+  min-height: 50px;
+}
+
+.calendar-week-day__topline {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+}
+
+.calendar-week-day__heading,
+.calendar-week-day__statuses {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.calendar-week-day__heading {
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.calendar-week-day__weekday {
+  color: var(--color-mocha-bean);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.calendar-week-day__date {
+  flex: 1 1 64px;
+  min-width: 0;
+  overflow: visible;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1.2;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.calendar-week-day__statuses {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.calendar-week-day__statuses > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.calendar-week-day--unavailable {
+  justify-content: center;
+  border-style: dashed;
+  color: var(--color-mocha-bean);
+  background: transparent;
+  opacity: 0.65;
+}
+
+.calendar-day.calendar-week-day--unavailable:hover {
+  border-color: var(--color-warm-cappuccino);
+  background: transparent;
+}
+
+.calendar-week-day__unavailable-label {
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .calendar-day:hover {
@@ -1691,6 +1778,83 @@ progress::-moz-progress-bar {
     background: var(--color-warm-cappuccino);
     font-size: 0.7rem;
     font-weight: 900;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar__grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day {
+    min-height: 0;
+    padding: 10px;
+    gap: 8px;
+    align-items: stretch;
+    text-align: left;
+  }
+
+  .calendar[data-calendar-mode="week"]
+    .calendar-week-day[aria-selected="true"] {
+    padding: 8px;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day__button {
+    display: block;
+    min-height: 44px;
+    text-align: left;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day__topline {
+    display: grid;
+    gap: 6px;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day__heading {
+    justify-content: flex-start;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day__weekday {
+    min-width: 28px;
+    font-size: 0.76rem;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day__date {
+    overflow: visible;
+    font-size: 0.82rem;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day__statuses {
+    justify-content: flex-start;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-day__today-label,
+  .calendar[data-calendar-mode="week"] .calendar-day__selected-label {
+    font-size: 0.64rem;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-day__today-label::after,
+  .calendar[data-calendar-mode="week"] .calendar-day__selected-label::after {
+    content: none;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-day__tasks {
+    display: grid;
+    width: 100%;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-task__title {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .calendar[data-calendar-mode="week"] .calendar-week-day--unavailable {
+    min-height: 76px;
+    align-items: flex-start;
+    justify-content: center;
   }
 
   .calendar-day-overview {

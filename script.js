@@ -75,6 +75,19 @@ const CALENDAR_NAVIGATION_LABELS = Object.freeze({
     next: "Следующий день",
   }),
 });
+const CALENDAR_MODE_LABELS = Object.freeze({
+  month: "Месяц",
+  week: "Неделя",
+});
+const CALENDAR_WEEKDAY_NAMES = Object.freeze([
+  "Пн",
+  "Вт",
+  "Ср",
+  "Чт",
+  "Пт",
+  "Сб",
+  "Вс",
+]);
 const BASE_SUBJECT_ORDER = Object.freeze([
   "Русский язык",
   "Математика",
@@ -160,6 +173,8 @@ const elements = {
   profileXpToNext: document.querySelector("#profile-xp-to-next"),
   profileProgressText: document.querySelector("#profile-progress-text"),
   profileProgress: document.querySelector("#profile-progress"),
+  calendar: document.querySelector(".calendar"),
+  calendarModeLabel: document.querySelector(".calendar__title-line .eyebrow"),
   calendarMonthLabel: document.querySelector("#calendar-month"),
   calendarPrevious: document.querySelector("#calendar-previous"),
   calendarPreviousLabel: document.querySelector(
@@ -398,6 +413,43 @@ function getCalendarWeekMonday(parts) {
   return getCalendarDateFromDayIndex(dayIndex - daysSinceMonday);
 }
 
+function getCalendarWeekDates(parts) {
+  const monday = getCalendarWeekMonday(parts);
+
+  if (!monday) {
+    return [];
+  }
+
+  return CALENDAR_WEEKDAY_NAMES.map((_, dayOffset) =>
+    addCalendarDays(monday, dayOffset),
+  );
+}
+
+function formatCalendarWeekRange(startParts, endParts) {
+  if (
+    !isValidCalendarDateParts(startParts) ||
+    !isValidCalendarDateParts(endParts)
+  ) {
+    return "";
+  }
+
+  const startMonthName = CALENDAR_MONTH_NAMES_GENITIVE[startParts.month - 1];
+  const endMonthName = CALENDAR_MONTH_NAMES_GENITIVE[endParts.month - 1];
+
+  if (
+    startParts.year === endParts.year &&
+    startParts.month === endParts.month
+  ) {
+    return `${startParts.day}–${endParts.day} ${startMonthName} ${startParts.year}`;
+  }
+
+  if (startParts.year === endParts.year) {
+    return `${startParts.day} ${startMonthName} — ${endParts.day} ${endMonthName} ${startParts.year}`;
+  }
+
+  return `${startParts.day} ${startMonthName} ${startParts.year} — ${endParts.day} ${endMonthName} ${endParts.year}`;
+}
+
 function getCalendarDateAfterPeriodChange(parts, periodDelta) {
   if (!Number.isSafeInteger(periodDelta)) {
     return null;
@@ -536,26 +588,36 @@ function getSortedActiveTasks(tasks) {
   return [...tasks].sort(compareActiveTasks);
 }
 
-function getCalendarMonthTasks() {
-  const visibleDate = parseCalendarDate(selectedCalendarDate);
-
-  if (!visibleDate) {
+function getCalendarTasksForRange(startDateKey, endDateKey) {
+  if (
+    !isValidCalendarDate(startDateKey) ||
+    !isValidCalendarDate(endDateKey) ||
+    startDateKey > endDateKey
+  ) {
     return [];
   }
 
-  const { year: visibleYear, month: visibleMonth } = visibleDate;
-
   return getSortedActiveTasks(
-    appState.tasks.filter((task) => {
-      const deadline = parseCalendarDate(task.currentDeadline);
-
-      return (
+    appState.tasks.filter(
+      (task) =>
         task.status === "active" &&
-        deadline?.year === visibleYear &&
-        deadline.month === visibleMonth
-      );
-    }),
+        task.currentDeadline >= startDateKey &&
+        task.currentDeadline <= endDateKey,
+    ),
   );
+}
+
+function groupCalendarTasksByDate(tasks) {
+  const tasksByDate = new Map();
+
+  for (const task of tasks) {
+    const dateTasks = tasksByDate.get(task.currentDeadline) ?? [];
+
+    dateTasks.push(task);
+    tasksByDate.set(task.currentDeadline, dateTasks);
+  }
+
+  return tasksByDate;
 }
 
 function getLegendSubjects(tasks) {
@@ -608,14 +670,14 @@ function getLegendSubjects(tasks) {
   });
 }
 
-function renderCalendarLegend(monthTasks) {
-  const subjects = getLegendSubjects(monthTasks);
+function renderCalendarLegend(tasks, emptyText) {
+  const subjects = getLegendSubjects(tasks);
 
   if (subjects.length === 0) {
     const empty = document.createElement("p");
 
     empty.className = "calendar-legend__empty";
-    empty.textContent = "В этом месяце активных задач нет";
+    empty.textContent = emptyText;
     elements.calendarLegend.replaceChildren(empty);
     return;
   }
@@ -948,6 +1010,112 @@ function createCalendarDayButton(parts, tasks, todayKey) {
   return cell;
 }
 
+function createCalendarWeekDay(parts, tasks, todayKey, weekdayIndex) {
+  const dateKey = toCalendarDateKey(parts);
+  const fullDate = formatFullCalendarDate(parts);
+  const weekdayName = CALENDAR_WEEKDAY_NAMES[weekdayIndex];
+  const isToday = dateKey === todayKey;
+  const isSelected = dateKey === selectedCalendarDate;
+  const cell = document.createElement("div");
+  const button = document.createElement("button");
+  const topline = document.createElement("span");
+  const heading = document.createElement("span");
+  const weekday = document.createElement("span");
+  const date = document.createElement("span");
+  const statuses = document.createElement("span");
+  const labels = [];
+
+  cell.className = "calendar-day calendar-week-day";
+  cell.dataset.date = dateKey;
+  cell.setAttribute("aria-selected", String(isSelected));
+  button.className = "calendar-day__button calendar-week-day__button";
+  button.type = "button";
+  button.setAttribute("aria-selected", String(isSelected));
+  topline.className = "calendar-day__topline calendar-week-day__topline";
+  heading.className = "calendar-week-day__heading";
+  weekday.className = "calendar-week-day__weekday";
+  weekday.textContent = weekdayName;
+  date.className = "calendar-week-day__date";
+  date.textContent = `${parts.day} ${CALENDAR_MONTH_NAMES_GENITIVE[parts.month - 1]}`;
+  statuses.className = "calendar-week-day__statuses";
+  heading.append(weekday, date);
+  topline.append(heading);
+
+  if (isToday) {
+    const todayLabel = document.createElement("span");
+
+    cell.classList.add("calendar-day--today");
+    button.setAttribute("aria-current", "date");
+    todayLabel.className = "calendar-day__today-label";
+    todayLabel.textContent = "Сегодня";
+    statuses.append(todayLabel);
+    labels.push("Сегодня");
+  }
+
+  if (isSelected) {
+    const selectedLabel = document.createElement("span");
+
+    selectedLabel.className = "calendar-day__selected-label";
+    selectedLabel.textContent = "Выбран";
+    statuses.append(selectedLabel);
+    labels.push("Выбранный день");
+  }
+
+  if (labels.length > 0) {
+    topline.append(statuses);
+  }
+
+  button.append(topline);
+  cell.append(button);
+
+  if (tasks.length > 0) {
+    const tasksWrapper = document.createElement("span");
+
+    tasksWrapper.className = "calendar-day__tasks";
+
+    for (const task of tasks) {
+      tasksWrapper.append(createCalendarTaskPill(task, todayKey));
+    }
+
+    cell.append(tasksWrapper);
+  }
+
+  const tasksLabel =
+    tasks.length === 0 ? "активных задач нет" : `активных задач: ${tasks.length}`;
+
+  button.setAttribute(
+    "aria-label",
+    [weekdayName, fullDate, ...labels, tasksLabel].join(", "),
+  );
+  cell.addEventListener("click", (event) => {
+    if (event.target.closest(".calendar-task")) {
+      return;
+    }
+
+    selectedCalendarDate = dateKey;
+    renderCalendar();
+  });
+  return cell;
+}
+
+function createUnavailableCalendarWeekDay(weekdayIndex) {
+  const cell = document.createElement("div");
+  const weekday = document.createElement("span");
+  const unavailable = document.createElement("span");
+  const weekdayName = CALENDAR_WEEKDAY_NAMES[weekdayIndex];
+
+  cell.className =
+    "calendar-day calendar-week-day calendar-week-day--unavailable";
+  cell.setAttribute("aria-disabled", "true");
+  cell.setAttribute("aria-label", `${weekdayName}, дата недоступна`);
+  weekday.className = "calendar-week-day__weekday";
+  weekday.textContent = weekdayName;
+  unavailable.className = "calendar-week-day__unavailable-label";
+  unavailable.textContent = "Недоступно";
+  cell.append(weekday, unavailable);
+  return cell;
+}
+
 function createCalendarDayOverviewTask(task, todayParts) {
   const deadlineState = getDeadlineState(task, todayParts);
   const item = document.createElement("article");
@@ -1016,33 +1184,25 @@ function updateCalendarNavigation() {
   elements.calendarNextLabel.textContent = labels.next;
 }
 
-function renderCalendar() {
-  closeCalendarTaskTooltip();
-  updateCalendarNavigation();
-
-  const visibleDate = parseCalendarDate(selectedCalendarDate);
-
-  if (!visibleDate) {
-    return;
-  }
-
+function renderMonthCalendar(visibleDate, todayKey) {
   const { year: visibleYear, month: visibleMonth } = visibleDate;
-  const todayParts = getLocalTodayParts();
-  const todayKey = toCalendarDateKey(todayParts);
-  const monthTasks = getCalendarMonthTasks();
-  const tasksByDate = new Map();
-
-  for (const task of monthTasks) {
-    const tasks = tasksByDate.get(task.currentDeadline) ?? [];
-
-    tasks.push(task);
-    tasksByDate.set(task.currentDeadline, tasks);
-  }
+  const daysInMonth = getDaysInMonth(visibleYear, visibleMonth);
+  const firstDateKey = toCalendarDateKey({
+    year: visibleYear,
+    month: visibleMonth,
+    day: 1,
+  });
+  const lastDateKey = toCalendarDateKey({
+    year: visibleYear,
+    month: visibleMonth,
+    day: daysInMonth,
+  });
+  const monthTasks = getCalendarTasksForRange(firstDateKey, lastDateKey);
+  const tasksByDate = groupCalendarTasksByDate(monthTasks);
 
   elements.calendarMonthLabel.textContent = `${CALENDAR_MONTH_NAMES[visibleMonth - 1]} ${visibleYear}`;
-  renderCalendarLegend(monthTasks);
+  renderCalendarLegend(monthTasks, "В этом месяце активных задач нет");
 
-  const daysInMonth = getDaysInMonth(visibleYear, visibleMonth);
   const leadingEmptyCells = getMondayFirstOffset(visibleYear, visibleMonth);
   const totalCells = Math.ceil((leadingEmptyCells + daysInMonth) / 7) * 7;
   const fragment = document.createDocumentFragment();
@@ -1072,6 +1232,84 @@ function renderCalendar() {
   }
 
   elements.calendarGrid.replaceChildren(fragment);
+}
+
+function renderWeekCalendar(selectedParts, todayKey) {
+  const weekDates = getCalendarWeekDates(selectedParts);
+  const validWeekDates = weekDates.filter((parts) => parts !== null);
+
+  if (validWeekDates.length === 0) {
+    elements.calendarGrid.replaceChildren();
+    return;
+  }
+
+  const firstDateKey = toCalendarDateKey(validWeekDates[0]);
+  const lastDateKey = toCalendarDateKey(
+    validWeekDates[validWeekDates.length - 1],
+  );
+  const weekTasks = getCalendarTasksForRange(firstDateKey, lastDateKey);
+  const tasksByDate = groupCalendarTasksByDate(weekTasks);
+  const fragment = document.createDocumentFragment();
+
+  elements.calendarMonthLabel.textContent = formatCalendarWeekRange(
+    validWeekDates[0],
+    validWeekDates[validWeekDates.length - 1],
+  );
+  renderCalendarLegend(weekTasks, "На этой неделе активных задач нет");
+
+  for (let weekdayIndex = 0; weekdayIndex < weekDates.length; weekdayIndex += 1) {
+    const parts = weekDates[weekdayIndex];
+
+    if (!parts) {
+      fragment.append(createUnavailableCalendarWeekDay(weekdayIndex));
+      continue;
+    }
+
+    const dateKey = toCalendarDateKey(parts);
+
+    fragment.append(
+      createCalendarWeekDay(
+        parts,
+        tasksByDate.get(dateKey) ?? [],
+        todayKey,
+        weekdayIndex,
+      ),
+    );
+  }
+
+  elements.calendarGrid.replaceChildren(fragment);
+}
+
+function renderCalendar() {
+  closeCalendarTaskTooltip();
+
+  const selectedParts = parseCalendarDate(selectedCalendarDate);
+
+  if (!selectedParts) {
+    return;
+  }
+
+  if (calendarMode !== "month" && calendarMode !== "week") {
+    calendarMode = "month";
+  }
+
+  const todayParts = getLocalTodayParts();
+  const todayKey = toCalendarDateKey(todayParts);
+
+  elements.calendar.dataset.calendarMode = calendarMode;
+  elements.calendarModeLabel.textContent = CALENDAR_MODE_LABELS[calendarMode];
+  elements.calendarGrid.setAttribute(
+    "aria-label",
+    calendarMode === "week" ? "Дни недели" : "Дни месяца",
+  );
+  updateCalendarNavigation();
+
+  if (calendarMode === "week") {
+    renderWeekCalendar(selectedParts, todayKey);
+  } else {
+    renderMonthCalendar(selectedParts, todayKey);
+  }
+
   updateCalendarTaskTabStops();
   renderCalendarDayOverview(todayParts);
 }
