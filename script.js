@@ -888,7 +888,11 @@ function createCalendarDayButton(parts, tasks, todayKey) {
     "aria-label",
     [fullDate, ...labels, tasksLabel].join(", "),
   );
-  button.addEventListener("click", () => {
+  cell.addEventListener("click", (event) => {
+    if (event.target.closest(".calendar-task")) {
+      return;
+    }
+
     selectedCalendarDate = dateKey;
     renderCalendar();
   });
