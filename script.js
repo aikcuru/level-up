@@ -61,6 +61,20 @@ const CALENDAR_MONTH_NAMES_GENITIVE = Object.freeze([
   "ноября",
   "декабря",
 ]);
+const CALENDAR_NAVIGATION_LABELS = Object.freeze({
+  month: Object.freeze({
+    previous: "Предыдущий месяц",
+    next: "Следующий месяц",
+  }),
+  week: Object.freeze({
+    previous: "Предыдущая неделя",
+    next: "Следующая неделя",
+  }),
+  day: Object.freeze({
+    previous: "Предыдущий день",
+    next: "Следующий день",
+  }),
+});
 const BASE_SUBJECT_ORDER = Object.freeze([
   "Русский язык",
   "Математика",
@@ -148,8 +162,14 @@ const elements = {
   profileProgress: document.querySelector("#profile-progress"),
   calendarMonthLabel: document.querySelector("#calendar-month"),
   calendarPrevious: document.querySelector("#calendar-previous"),
+  calendarPreviousLabel: document.querySelector(
+    "#calendar-previous .calendar__control-label--desktop",
+  ),
   calendarToday: document.querySelector("#calendar-today"),
   calendarNext: document.querySelector("#calendar-next"),
+  calendarNextLabel: document.querySelector(
+    "#calendar-next .calendar__control-label--desktop",
+  ),
   calendarLegend: document.querySelector("#calendar-legend"),
   calendarGrid: document.querySelector("#calendar-grid"),
   calendarSelectedDate: document.querySelector("#calendar-selected-date"),
@@ -376,6 +396,35 @@ function getCalendarWeekMonday(parts) {
   const daysSinceMonday = ((dayIndex + 2) % 7 + 7) % 7;
 
   return getCalendarDateFromDayIndex(dayIndex - daysSinceMonday);
+}
+
+function getCalendarDateAfterPeriodChange(parts, periodDelta) {
+  if (!Number.isSafeInteger(periodDelta)) {
+    return null;
+  }
+
+  if (calendarMode === "month") {
+    return addCalendarMonths(parts, periodDelta);
+  }
+
+  if (calendarMode === "week") {
+    return addCalendarDays(parts, periodDelta * 7);
+  }
+
+  if (calendarMode === "day") {
+    return addCalendarDays(parts, periodDelta);
+  }
+
+  return null;
+}
+
+function canChangeCalendarPeriod(periodDelta) {
+  const selectedParts = parseCalendarDate(selectedCalendarDate);
+
+  return (
+    selectedParts !== null &&
+    getCalendarDateAfterPeriodChange(selectedParts, periodDelta) !== null
+  );
 }
 
 function getDayWord(value) {
@@ -952,8 +1001,24 @@ function renderCalendarDayOverview(todayParts) {
   elements.calendarSelectedEmpty.hidden = selectedTasks.length > 0;
 }
 
+function updateCalendarNavigation() {
+  const labels = CALENDAR_NAVIGATION_LABELS[calendarMode];
+
+  if (!labels) {
+    return;
+  }
+
+  elements.calendarPrevious.disabled = !canChangeCalendarPeriod(-1);
+  elements.calendarNext.disabled = !canChangeCalendarPeriod(1);
+  elements.calendarPrevious.setAttribute("aria-label", labels.previous);
+  elements.calendarNext.setAttribute("aria-label", labels.next);
+  elements.calendarPreviousLabel.textContent = labels.previous;
+  elements.calendarNextLabel.textContent = labels.next;
+}
+
 function renderCalendar() {
   closeCalendarTaskTooltip();
+  updateCalendarNavigation();
 
   const visibleDate = parseCalendarDate(selectedCalendarDate);
 
@@ -1011,10 +1076,10 @@ function renderCalendar() {
   renderCalendarDayOverview(todayParts);
 }
 
-function changeCalendarMonth(monthDelta) {
+function changeCalendarPeriod(periodDelta) {
   const selectedDate = parseCalendarDate(selectedCalendarDate);
   const nextDate = selectedDate
-    ? addCalendarMonths(selectedDate, monthDelta)
+    ? getCalendarDateAfterPeriodChange(selectedDate, periodDelta)
     : null;
 
   if (!nextDate) {
@@ -2379,10 +2444,10 @@ async function initializeApp() {
     }
   });
   elements.calendarPrevious.addEventListener("click", () =>
-    changeCalendarMonth(-1),
+    changeCalendarPeriod(-1),
   );
   elements.calendarToday.addEventListener("click", showCalendarToday);
-  elements.calendarNext.addEventListener("click", () => changeCalendarMonth(1));
+  elements.calendarNext.addEventListener("click", () => changeCalendarPeriod(1));
   elements.subjectForm.addEventListener("submit", handleSubjectSubmit);
   elements.subjectNameInput.addEventListener("input", () => {
     clearFieldError(elements.subjectNameInput, elements.subjectNameError);
