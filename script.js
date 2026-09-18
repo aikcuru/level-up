@@ -146,7 +146,7 @@ const elements = {
   profileXpToNext: document.querySelector("#profile-xp-to-next"),
   profileProgressText: document.querySelector("#profile-progress-text"),
   profileProgress: document.querySelector("#profile-progress"),
-  calendarMonth: document.querySelector("#calendar-month"),
+  calendarMonthLabel: document.querySelector("#calendar-month"),
   calendarPrevious: document.querySelector("#calendar-previous"),
   calendarToday: document.querySelector("#calendar-today"),
   calendarNext: document.querySelector("#calendar-next"),
@@ -168,8 +168,7 @@ let activeTasksExpanded = true;
 let editingTaskId = null;
 let editingTaskVersionAtOpen = null;
 const initialCalendarToday = getLocalTodayParts();
-let calendarYear = initialCalendarToday.year;
-let calendarMonth = initialCalendarToday.month;
+let calendarMode = "month";
 let selectedCalendarDate = toCalendarDateKey(initialCalendarToday);
 let calendarTooltipTrigger = null;
 let calendarTooltipTaskId = null;
@@ -489,14 +488,22 @@ function getSortedActiveTasks(tasks) {
 }
 
 function getCalendarMonthTasks() {
+  const visibleDate = parseCalendarDate(selectedCalendarDate);
+
+  if (!visibleDate) {
+    return [];
+  }
+
+  const { year: visibleYear, month: visibleMonth } = visibleDate;
+
   return getSortedActiveTasks(
     appState.tasks.filter((task) => {
       const deadline = parseCalendarDate(task.currentDeadline);
 
       return (
         task.status === "active" &&
-        deadline?.year === calendarYear &&
-        deadline.month === calendarMonth
+        deadline?.year === visibleYear &&
+        deadline.month === visibleMonth
       );
     }),
   );
@@ -944,6 +951,13 @@ function renderCalendarDayOverview(todayParts) {
 function renderCalendar() {
   closeCalendarTaskTooltip();
 
+  const visibleDate = parseCalendarDate(selectedCalendarDate);
+
+  if (!visibleDate) {
+    return;
+  }
+
+  const { year: visibleYear, month: visibleMonth } = visibleDate;
   const todayParts = getLocalTodayParts();
   const todayKey = toCalendarDateKey(todayParts);
   const monthTasks = getCalendarMonthTasks();
@@ -956,11 +970,11 @@ function renderCalendar() {
     tasksByDate.set(task.currentDeadline, tasks);
   }
 
-  elements.calendarMonth.textContent = `${CALENDAR_MONTH_NAMES[calendarMonth - 1]} ${calendarYear}`;
+  elements.calendarMonthLabel.textContent = `${CALENDAR_MONTH_NAMES[visibleMonth - 1]} ${visibleYear}`;
   renderCalendarLegend(monthTasks);
 
-  const daysInMonth = getDaysInMonth(calendarYear, calendarMonth);
-  const leadingEmptyCells = getMondayFirstOffset(calendarYear, calendarMonth);
+  const daysInMonth = getDaysInMonth(visibleYear, visibleMonth);
+  const leadingEmptyCells = getMondayFirstOffset(visibleYear, visibleMonth);
   const totalCells = Math.ceil((leadingEmptyCells + daysInMonth) / 7) * 7;
   const fragment = document.createDocumentFragment();
 
@@ -976,7 +990,7 @@ function renderCalendar() {
       continue;
     }
 
-    const parts = { year: calendarYear, month: calendarMonth, day };
+    const parts = { year: visibleYear, month: visibleMonth, day };
     const dateKey = toCalendarDateKey(parts);
 
     fragment.append(
@@ -994,23 +1008,22 @@ function renderCalendar() {
 }
 
 function changeCalendarMonth(monthDelta) {
-  const absoluteMonth = calendarYear * 12 + calendarMonth - 1 + monthDelta;
+  const selectedDate = parseCalendarDate(selectedCalendarDate);
+  const nextDate = selectedDate
+    ? addCalendarMonths(selectedDate, monthDelta)
+    : null;
 
-  calendarYear = Math.floor(absoluteMonth / 12);
-  calendarMonth = ((absoluteMonth % 12) + 12) % 12 + 1;
-  selectedCalendarDate = toCalendarDateKey({
-    year: calendarYear,
-    month: calendarMonth,
-    day: 1,
-  });
+  if (!nextDate) {
+    return;
+  }
+
+  selectedCalendarDate = toCalendarDateKey(nextDate);
   renderCalendar();
 }
 
 function showCalendarToday() {
   const todayParts = getLocalTodayParts();
 
-  calendarYear = todayParts.year;
-  calendarMonth = todayParts.month;
   selectedCalendarDate = toCalendarDateKey(todayParts);
   renderCalendar();
 }
