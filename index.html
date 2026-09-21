@@ -510,6 +510,37 @@
                   <p class="calendar__month" id="calendar-month" aria-live="polite"></p>
                 </div>
 
+                <div
+                  class="calendar__mode-switcher"
+                  role="group"
+                  aria-label="Режим календаря"
+                >
+                  <button
+                    class="calendar__mode-button"
+                    type="button"
+                    data-calendar-mode="month"
+                    aria-pressed="true"
+                  >
+                    Месяц
+                  </button>
+                  <button
+                    class="calendar__mode-button"
+                    type="button"
+                    data-calendar-mode="week"
+                    aria-pressed="false"
+                  >
+                    Неделя
+                  </button>
+                  <button
+                    class="calendar__mode-button"
+                    type="button"
+                    data-calendar-mode="day"
+                    aria-pressed="false"
+                  >
+                    День
+                  </button>
+                </div>
+
                 <div class="calendar__controls" aria-label="Управление календарём">
                   <button
                     class="calendar__control-button"

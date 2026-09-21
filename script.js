@@ -181,6 +181,11 @@ const elements = {
   profileProgress: document.querySelector("#profile-progress"),
   calendar: document.querySelector(".calendar"),
   calendarModeLabel: document.querySelector(".calendar__title-line .eyebrow"),
+  calendarModeButtons: [
+    ...document.querySelectorAll(
+      ".calendar__mode-button[data-calendar-mode]",
+    ),
+  ],
   calendarMonthLabel: document.querySelector("#calendar-month"),
   calendarPrevious: document.querySelector("#calendar-previous"),
   calendarPreviousLabel: document.querySelector(
@@ -1191,6 +1196,27 @@ function updateCalendarNavigation() {
   elements.calendarNextLabel.textContent = labels.next;
 }
 
+function updateCalendarModeControls() {
+  for (const button of elements.calendarModeButtons) {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.calendarMode === calendarMode),
+    );
+  }
+}
+
+function setCalendarMode(nextMode) {
+  if (
+    !Object.hasOwn(CALENDAR_MODE_LABELS, nextMode) ||
+    nextMode === calendarMode
+  ) {
+    return;
+  }
+
+  calendarMode = nextMode;
+  renderCalendar();
+}
+
 function renderMonthCalendar(visibleDate, todayKey) {
   const { year: visibleYear, month: visibleMonth } = visibleDate;
   const daysInMonth = getDaysInMonth(visibleYear, visibleMonth);
@@ -1320,6 +1346,7 @@ function renderCalendar() {
   const todayParts = getLocalTodayParts();
   const todayKey = toCalendarDateKey(todayParts);
 
+  updateCalendarModeControls();
   elements.calendar.dataset.calendarMode = calendarMode;
   elements.calendarModeLabel.textContent = CALENDAR_MODE_LABELS[calendarMode];
   elements.calendarGrid.setAttribute(
@@ -2707,6 +2734,11 @@ async function initializeApp() {
       closeCalendarTaskTooltip();
     }
   });
+  for (const button of elements.calendarModeButtons) {
+    button.addEventListener("click", () =>
+      setCalendarMode(button.dataset.calendarMode),
+    );
+  }
   elements.calendarPrevious.addEventListener("click", () =>
     changeCalendarPeriod(-1),
   );
