@@ -8,6 +8,8 @@ const MAX_CALENDAR_YEAR = 9999;
 const FILTER_ALL = "all";
 const FILTER_WITHOUT_SUBJECT = "__without_subject__";
 const FILTER_SUBJECT_PREFIX = "subject:";
+const UI_PREFERENCES_STORAGE_KEY = "level-up:ui-preferences";
+const UI_PREFERENCES_VERSION = 1;
 const MAIN_TAB_NAMES = Object.freeze(["tasks", "calendar", "archive"]);
 const DIRECTIONS = Object.freeze([
   "Школа",
@@ -514,6 +516,99 @@ function toCalendarDateKey({ year, month, day }) {
   return [year, month, day]
     .map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0"))
     .join("-");
+}
+
+function createDefaultUiPreferences() {
+  return {
+    version: UI_PREFERENCES_VERSION,
+    activeMainTab: "tasks",
+    filters: {
+      status: FILTER_ALL,
+      direction: FILTER_ALL,
+      subject: FILTER_ALL,
+    },
+    calendar: {
+      mode: "month",
+      selectedDate: toCalendarDateKey(getLocalTodayParts()),
+    },
+  };
+}
+
+function readUiPreferences() {
+  try {
+    const storedValue = window.sessionStorage.getItem(
+      UI_PREFERENCES_STORAGE_KEY,
+    );
+
+    return storedValue === null ? null : JSON.parse(storedValue);
+  } catch {
+    return null;
+  }
+}
+
+function writeUiPreferences(value) {
+  try {
+    window.sessionStorage.setItem(
+      UI_PREFERENCES_STORAGE_KEY,
+      JSON.stringify(value),
+    );
+  } catch {
+    // Preferences are optional and must not interrupt the application.
+  }
+}
+
+function clearUiPreferences() {
+  try {
+    window.sessionStorage.removeItem(UI_PREFERENCES_STORAGE_KEY);
+  } catch {
+    // Preferences are optional and must not interrupt the application.
+  }
+}
+
+function validateUiPreferences(value) {
+  const defaults = createDefaultUiPreferences();
+
+  if (
+    !isPlainObject(value) ||
+    value.version !== UI_PREFERENCES_VERSION
+  ) {
+    return defaults;
+  }
+
+  const filters = isPlainObject(value.filters) ? value.filters : {};
+  const calendar = isPlainObject(value.calendar) ? value.calendar : {};
+  const isValidSubject =
+    typeof filters.subject === "string" &&
+    (filters.subject === FILTER_ALL ||
+      filters.subject === FILTER_WITHOUT_SUBJECT ||
+      (filters.subject.startsWith(FILTER_SUBJECT_PREFIX) &&
+        filters.subject.length > FILTER_SUBJECT_PREFIX.length));
+
+  return {
+    version: UI_PREFERENCES_VERSION,
+    activeMainTab: MAIN_TAB_NAMES.includes(value.activeMainTab)
+      ? value.activeMainTab
+      : defaults.activeMainTab,
+    filters: {
+      status: [FILTER_ALL, "active", "overdue"].includes(filters.status)
+        ? filters.status
+        : defaults.filters.status,
+      direction:
+        filters.direction === FILTER_ALL ||
+        DIRECTIONS.includes(filters.direction)
+          ? filters.direction
+          : defaults.filters.direction,
+      subject: isValidSubject ? filters.subject : defaults.filters.subject,
+    },
+    calendar: {
+      mode: Object.hasOwn(CALENDAR_MODE_LABELS, calendar.mode)
+        ? calendar.mode
+        : defaults.calendar.mode,
+      selectedDate: isValidCalendarDate(calendar.selectedDate)
+        ? calendar.selectedDate
+        : defaults.calendar.selectedDate,
+    },
+  };
 }
 
 function getDaysInMonth(year, month) {
