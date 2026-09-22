@@ -611,6 +611,22 @@ function validateUiPreferences(value) {
   };
 }
 
+function applyInitialUiPreferences(preferences) {
+  activeMainTab = preferences.activeMainTab;
+  elements.statusFilter.value = preferences.filters.status;
+  elements.directionFilter.value = preferences.filters.direction;
+  calendarMode = preferences.calendar.mode;
+  selectedCalendarDate = preferences.calendar.selectedDate;
+}
+
+function resetUiStateToDefaults() {
+  const defaults = createDefaultUiPreferences();
+
+  applyInitialUiPreferences(defaults);
+  elements.subjectFilter.value = defaults.filters.subject;
+  return defaults;
+}
+
 function getDaysInMonth(year, month) {
   const days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const isLeapYear =
@@ -1554,8 +1570,12 @@ function getApiErrorMessage(error, fallback) {
 }
 
 function requireReauthentication() {
+  clearUiPreferences();
+  const defaults = resetUiStateToDefaults();
+
   csrfToken = null;
   currentUser = null;
+  setActiveMainTab(defaults.activeMainTab);
   showLogin("Сессия завершена. Войдите снова, чтобы продолжить.");
 }
 
@@ -1670,9 +1690,14 @@ function adaptServerState(value) {
   };
 }
 
-async function loadServerState() {
+async function loadServerState({ initialUiPreferences = null } = {}) {
   appState = adaptServerState(await apiRequest("/state"));
-  renderAllServerState();
+
+  if (initialUiPreferences !== null) {
+    applyInitialUiPreferences(initialUiPreferences);
+  }
+
+  renderAllServerState(initialUiPreferences?.filters.subject);
   return appState;
 }
 
@@ -2091,8 +2116,9 @@ function renderSubjects() {
   elements.subjectsList.replaceChildren(fragment);
 }
 
-function renderSubjectFilterOptions() {
-  const previousValue = elements.subjectFilter.value || FILTER_ALL;
+function renderSubjectFilterOptions(
+  preferredValue = elements.subjectFilter.value || FILTER_ALL,
+) {
   const options = [
     createOption(FILTER_ALL, "Все предметы"),
     createOption(FILTER_WITHOUT_SUBJECT, "Без предмета"),
@@ -2113,8 +2139,8 @@ function renderSubjectFilterOptions() {
       (subject) => `${FILTER_SUBJECT_PREFIX}${subject.id}`,
     ),
   ]);
-  elements.subjectFilter.value = availableValues.has(previousValue)
-    ? previousValue
+  elements.subjectFilter.value = availableValues.has(preferredValue)
+    ? preferredValue
     : FILTER_ALL;
   updateFiltersResetButton();
 }
@@ -2669,9 +2695,9 @@ function renderProfile() {
   );
 }
 
-function renderAllServerState() {
+function renderAllServerState(preferredSubjectFilter) {
   renderSubjects();
-  renderSubjectFilterOptions();
+  renderSubjectFilterOptions(preferredSubjectFilter);
   updateSubjectField();
   updateDifficultyPreview();
   renderProfile();
@@ -2716,8 +2742,11 @@ async function handleLoginSubmit(event) {
     csrfToken = auth.csrfToken;
     currentUser = auth;
     credentialsAccepted = true;
+    clearUiPreferences();
+    const defaults = resetUiStateToDefaults();
+
     await loadServerState();
-    setActiveMainTab("tasks");
+    setActiveMainTab(defaults.activeMainTab);
     elements.passwordInput.value = "";
     clearLoginError();
     showMainInterface();
@@ -2745,9 +2774,19 @@ async function restoreSession() {
     });
 
     csrfToken = csrf.csrfToken;
-    await loadServerState();
+    const initialUiPreferences = validateUiPreferences(readUiPreferences());
+
+    await loadServerState({ initialUiPreferences });
+    setActiveMainTab(initialUiPreferences.activeMainTab);
     showMainInterface();
   } catch (error) {
+    if (error.status === 401) {
+      clearUiPreferences();
+      const defaults = resetUiStateToDefaults();
+
+      setActiveMainTab(defaults.activeMainTab);
+    }
+
     csrfToken = null;
     currentUser = null;
     showLogin(
@@ -2770,13 +2809,16 @@ async function handleLogout() {
       method: "POST",
       withCsrf: true,
     });
+    clearUiPreferences();
+    const defaults = resetUiStateToDefaults();
+
     csrfToken = null;
     currentUser = null;
     appState = createEmptyState();
     setTaskFormCreateMode({ resetForm: true });
     setTaskFormPanelOpen(false);
     setFiltersPanelOpen(false);
-    setActiveMainTab("tasks");
+    setActiveMainTab(defaults.activeMainTab);
     elements.loginForm.reset();
     clearLoginError();
     showLogin();
