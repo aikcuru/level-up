@@ -212,6 +212,7 @@ let currentUser = null;
 let authRequestPending = false;
 let mutationPending = false;
 let activeMainTab = "tasks";
+let uiPreferencesReady = false;
 let activeTasksExpanded = true;
 let editingTaskId = null;
 let editingTaskVersionAtOpen = null;
@@ -625,6 +626,30 @@ function resetUiStateToDefaults() {
   applyInitialUiPreferences(defaults);
   elements.subjectFilter.value = defaults.filters.subject;
   return defaults;
+}
+
+function createCurrentUiPreferences() {
+  return {
+    version: UI_PREFERENCES_VERSION,
+    activeMainTab,
+    filters: {
+      status: elements.statusFilter.value,
+      direction: elements.directionFilter.value,
+      subject: elements.subjectFilter.value,
+    },
+    calendar: {
+      mode: calendarMode,
+      selectedDate: selectedCalendarDate,
+    },
+  };
+}
+
+function saveUiPreferences() {
+  if (!uiPreferencesReady) {
+    return;
+  }
+
+  writeUiPreferences(createCurrentUiPreferences());
 }
 
 function getDaysInMonth(year, month) {
@@ -1130,8 +1155,7 @@ function createCalendarDayButton(parts, tasks, todayKey) {
       return;
     }
 
-    selectedCalendarDate = dateKey;
-    renderCalendar();
+    setSelectedCalendarDate(dateKey);
   });
   return cell;
 }
@@ -1218,8 +1242,7 @@ function createCalendarWeekDay(parts, tasks, todayKey, weekdayIndex) {
       return;
     }
 
-    selectedCalendarDate = dateKey;
-    renderCalendar();
+    setSelectedCalendarDate(dateKey);
   });
   return cell;
 }
@@ -1326,6 +1349,20 @@ function setCalendarMode(nextMode) {
 
   calendarMode = nextMode;
   renderCalendar();
+  saveUiPreferences();
+}
+
+function setSelectedCalendarDate(nextDate) {
+  if (
+    !isValidCalendarDate(nextDate) ||
+    nextDate === selectedCalendarDate
+  ) {
+    return;
+  }
+
+  selectedCalendarDate = nextDate;
+  renderCalendar();
+  saveUiPreferences();
 }
 
 function renderMonthCalendar(visibleDate, todayKey) {
@@ -1488,15 +1525,13 @@ function changeCalendarPeriod(periodDelta) {
     return;
   }
 
-  selectedCalendarDate = toCalendarDateKey(nextDate);
-  renderCalendar();
+  setSelectedCalendarDate(toCalendarDateKey(nextDate));
 }
 
 function showCalendarToday() {
   const todayParts = getLocalTodayParts();
 
-  selectedCalendarDate = toCalendarDateKey(todayParts);
-  renderCalendar();
+  setSelectedCalendarDate(toCalendarDateKey(todayParts));
 }
 
 function getDeadlineState(task, todayParts = getLocalTodayParts()) {
@@ -1570,6 +1605,7 @@ function getApiErrorMessage(error, fallback) {
 }
 
 function requireReauthentication() {
+  uiPreferencesReady = false;
   clearUiPreferences();
   const defaults = resetUiStateToDefaults();
 
@@ -1697,7 +1733,14 @@ async function loadServerState({ initialUiPreferences = null } = {}) {
     applyInitialUiPreferences(initialUiPreferences);
   }
 
-  renderAllServerState(initialUiPreferences?.filters.subject);
+  const subjectFilterDidFallback = renderAllServerState(
+    initialUiPreferences?.filters.subject,
+  );
+
+  if (subjectFilterDidFallback) {
+    saveUiPreferences();
+  }
+
   return appState;
 }
 
@@ -1953,6 +1996,12 @@ function resetFilters() {
   elements.directionFilter.value = FILTER_ALL;
   elements.subjectFilter.value = FILTER_ALL;
   renderTaskLists();
+  saveUiPreferences();
+}
+
+function handleTaskFiltersChange() {
+  renderTaskLists();
+  saveUiPreferences();
 }
 
 function closeEditingForTask(taskId) {
@@ -2143,6 +2192,7 @@ function renderSubjectFilterOptions(
     ? preferredValue
     : FILTER_ALL;
   updateFiltersResetButton();
+  return elements.subjectFilter.value !== preferredValue;
 }
 
 function updateSubjectField() {
@@ -2565,6 +2615,8 @@ function setActiveMainTab(tabName, { moveFocus = false } = {}) {
     return;
   }
 
+  const didChange = activeMainTab !== tabName;
+
   activeMainTab = tabName;
   closeCalendarTaskTooltip();
   setSettingsPanelOpen(false);
@@ -2581,6 +2633,10 @@ function setActiveMainTab(tabName, { moveFocus = false } = {}) {
     if (isActive && moveFocus) {
       tab.focus();
     }
+  }
+
+  if (didChange) {
+    saveUiPreferences();
   }
 }
 
@@ -2697,11 +2753,14 @@ function renderProfile() {
 
 function renderAllServerState(preferredSubjectFilter) {
   renderSubjects();
-  renderSubjectFilterOptions(preferredSubjectFilter);
+  const subjectFilterDidFallback =
+    renderSubjectFilterOptions(preferredSubjectFilter);
+
   updateSubjectField();
   updateDifficultyPreview();
   renderProfile();
   renderTaskLists();
+  return subjectFilterDidFallback;
 }
 
 function setAuthRequestPending(isPending) {
@@ -2742,11 +2801,13 @@ async function handleLoginSubmit(event) {
     csrfToken = auth.csrfToken;
     currentUser = auth;
     credentialsAccepted = true;
+    uiPreferencesReady = false;
     clearUiPreferences();
     const defaults = resetUiStateToDefaults();
 
     await loadServerState();
     setActiveMainTab(defaults.activeMainTab);
+    uiPreferencesReady = true;
     elements.passwordInput.value = "";
     clearLoginError();
     showMainInterface();
@@ -2763,6 +2824,7 @@ async function handleLoginSubmit(event) {
 
 async function restoreSession() {
   showAuthLoading();
+  uiPreferencesReady = false;
 
   try {
     currentUser = await apiRequest("/auth/me", {
@@ -2778,9 +2840,12 @@ async function restoreSession() {
 
     await loadServerState({ initialUiPreferences });
     setActiveMainTab(initialUiPreferences.activeMainTab);
+    uiPreferencesReady = true;
+    saveUiPreferences();
     showMainInterface();
   } catch (error) {
     if (error.status === 401) {
+      uiPreferencesReady = false;
       clearUiPreferences();
       const defaults = resetUiStateToDefaults();
 
@@ -2809,6 +2874,7 @@ async function handleLogout() {
       method: "POST",
       withCsrf: true,
     });
+    uiPreferencesReady = false;
     clearUiPreferences();
     const defaults = resetUiStateToDefaults();
 
@@ -2896,9 +2962,9 @@ async function initializeApp() {
   );
   elements.taskForm.addEventListener("input", hideTaskFormStatus);
   elements.taskForm.addEventListener("submit", handleTaskSubmit);
-  elements.statusFilter.addEventListener("change", renderTaskLists);
-  elements.directionFilter.addEventListener("change", renderTaskLists);
-  elements.subjectFilter.addEventListener("change", renderTaskLists);
+  elements.statusFilter.addEventListener("change", handleTaskFiltersChange);
+  elements.directionFilter.addEventListener("change", handleTaskFiltersChange);
+  elements.subjectFilter.addEventListener("change", handleTaskFiltersChange);
   document.addEventListener("keydown", handleDocumentKeydown);
   window.addEventListener("resize", handleCalendarViewportChange);
   window.addEventListener("scroll", positionCalendarTaskTooltip, true);
