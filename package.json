@@ -1,0 +1,7 @@
+{
+  "name": "level-up",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
