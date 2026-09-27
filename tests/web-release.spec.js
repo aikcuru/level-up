@@ -986,6 +986,354 @@ test.describe("smoke/auth/state", () => {
   });
 });
 
+const MATRIX_FIXED_TIME_MS = Date.UTC(2026, 8, 18, 4, 0, 0);
+const MATRIX_TODAY_KEY = "2026-09-18";
+
+async function installMatrixClock(page) {
+  await page.clock.install({ time: new Date(MATRIX_FIXED_TIME_MS) });
+}
+
+function createSyntheticTask(overrides) {
+  const task = {
+    ...createMockState().tasks[0],
+    ...overrides,
+  };
+
+  if (!Object.hasOwn(overrides, "originalDeadline")) {
+    task.originalDeadline = task.currentDeadline;
+  }
+  if (!Object.hasOwn(overrides, "updatedAt")) {
+    task.updatedAt = task.createdAt;
+  }
+
+  return task;
+}
+
+async function expectTaskOrder(page, listSelector, expectedTitles) {
+  const titles = page.locator(`${listSelector} .task-card__title`);
+
+  await expect(titles).toHaveCount(expectedTitles.length);
+  await expect(titles).toHaveText(expectedTitles);
+}
+
+test.describe("E01-E04 required matrix", () => {
+  test("E01 orders active tasks by current deadline", async ({ page }) => {
+    const state = createMockState();
+    const tasks = [
+      createSyntheticTask({
+        id: "test-e01-future-002",
+        title: "E01 future second",
+        currentDeadline: "2026-09-20",
+        createdAt: "2026-09-06T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e01-today-001",
+        title: "E01 today older",
+        currentDeadline: MATRIX_TODAY_KEY,
+        createdAt: "2026-09-03T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e01-overdue-002",
+        title: "E01 overdue second",
+        currentDeadline: "2026-09-17",
+        createdAt: "2026-09-02T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e01-future-001",
+        title: "E01 future first",
+        currentDeadline: "2026-09-19",
+        createdAt: "2026-09-05T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e01-overdue-001",
+        title: "E01 overdue first",
+        currentDeadline: "2026-09-16",
+        createdAt: "2026-09-01T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e01-today-002",
+        title: "E01 today newer",
+        currentDeadline: MATRIX_TODAY_KEY,
+        createdAt: "2026-09-04T08:00:00.000Z",
+      }),
+    ];
+    const expectedTitles = [
+      "E01 overdue first",
+      "E01 overdue second",
+      "E01 today newer",
+      "E01 today older",
+      "E01 future first",
+      "E01 future second",
+    ];
+
+    state.tasks = tasks;
+    const controller = createApiMockController({ state });
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectTaskOrder(page, "#active-tasks-list", expectedTitles);
+    expect(tasks.map(({ title }) => title)).not.toEqual(expectedTitles);
+
+    const mutationProbe = await page.evaluate((inputTasks) => {
+      if (typeof window.getSortedActiveTasks !== "function") {
+        return { available: false };
+      }
+
+      const input = structuredClone(inputTasks);
+      const before = JSON.stringify(input);
+      const result = window.getSortedActiveTasks(input);
+
+      return {
+        available: true,
+        inputUnchanged: JSON.stringify(input) === before,
+        returnsNewArray: result !== input,
+      };
+    }, tasks);
+
+    expect(mutationProbe).toEqual({
+      available: true,
+      inputUnchanged: true,
+      returnsNewArray: true,
+    });
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E02 uses createdAt DESC and id DESC without title influence", async ({ page }) => {
+    const state = createMockState();
+    const tasks = [
+      createSyntheticTask({
+        id: "test-task-001",
+        title: "E02 older createdAt",
+        currentDeadline: "2026-09-21",
+        createdAt: "2026-09-01T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-task-003",
+        title: "E02 equal timestamp id 003",
+        currentDeadline: "2026-09-21",
+        createdAt: "2026-09-03T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-task-002",
+        title: "E02 newer createdAt",
+        currentDeadline: "2026-09-21",
+        createdAt: "2026-09-02T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-task-004",
+        title: "E02 equal timestamp id 004",
+        currentDeadline: "2026-09-21",
+        createdAt: "2026-09-03T08:00:00.000Z",
+      }),
+    ];
+    const initialOrder = [
+      "E02 equal timestamp id 004",
+      "E02 equal timestamp id 003",
+      "E02 newer createdAt",
+      "E02 older createdAt",
+    ];
+
+    state.tasks = tasks;
+    const controller = createApiMockController({ state });
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+
+    await expectTaskOrder(page, "#active-tasks-list", initialOrder);
+
+    const renamedTask = controller.state.tasks.find(
+      ({ id }) => id === "test-task-004",
+    );
+
+    renamedTask.title = "E02 renamed id 004";
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectTaskOrder(page, "#active-tasks-list", [
+      "E02 renamed id 004",
+      "E02 equal timestamp id 003",
+      "E02 newer createdAt",
+      "E02 older createdAt",
+    ]);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E03 applies AND filters and preserves completed server order", async ({ page }) => {
+    const state = createMockState();
+    const historySubjectId = "test-subject-history-001";
+    const mathSubjectId = "test-subject-math-001";
+    const completedTasks = [
+      createSyntheticTask({
+        id: "test-e03-completed-002",
+        title: "E03 completed server first",
+        direction: "Курс",
+        subjectId: historySubjectId,
+        difficulty: "easy",
+        xpReward: 5,
+        status: "completed",
+        currentDeadline: "2026-09-12",
+        xpAwarded: true,
+        createdAt: "2026-09-01T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e03-completed-001",
+        title: "E03 completed server second",
+        direction: "Школа",
+        subjectId: mathSubjectId,
+        difficulty: "medium",
+        xpReward: 20,
+        status: "completed",
+        currentDeadline: "2026-09-10",
+        xpAwarded: true,
+        createdAt: "2026-09-03T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e03-completed-003",
+        title: "E03 completed server third",
+        direction: "Личные дела",
+        subjectId: null,
+        difficulty: "hard",
+        xpReward: 50,
+        status: "completed",
+        currentDeadline: "2026-09-11",
+        xpAwarded: true,
+        createdAt: "2026-09-02T08:00:00.000Z",
+      }),
+    ];
+    const activeTasks = [
+      createSyntheticTask({
+        id: "test-e03-future-math",
+        title: "E03 school math future",
+        direction: "Школа",
+        subjectId: mathSubjectId,
+        currentDeadline: "2026-09-20",
+        createdAt: "2026-09-05T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e03-overdue-target",
+        title: "E03 school math overdue target",
+        direction: "Школа",
+        subjectId: mathSubjectId,
+        currentDeadline: "2026-09-17",
+        createdAt: "2026-09-04T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e03-today-course",
+        title: "E03 course history today",
+        direction: "Курс",
+        subjectId: historySubjectId,
+        currentDeadline: MATRIX_TODAY_KEY,
+        createdAt: "2026-09-03T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e03-overdue-personal",
+        title: "E03 personal overdue",
+        direction: "Личные дела",
+        subjectId: null,
+        currentDeadline: "2026-09-15",
+        createdAt: "2026-09-01T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e03-overdue-history",
+        title: "E03 school history overdue",
+        direction: "Школа",
+        subjectId: historySubjectId,
+        currentDeadline: "2026-09-16",
+        createdAt: "2026-09-02T08:00:00.000Z",
+      }),
+    ];
+    const allActiveOrder = [
+      "E03 personal overdue",
+      "E03 school history overdue",
+      "E03 school math overdue target",
+      "E03 course history today",
+      "E03 school math future",
+    ];
+
+    state.profile.totalXp = 75;
+    state.tasks = [
+      completedTasks[0],
+      activeTasks[0],
+      activeTasks[1],
+      completedTasks[1],
+      activeTasks[2],
+      activeTasks[3],
+      completedTasks[2],
+      activeTasks[4],
+    ];
+    const controller = createApiMockController({ state });
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+
+    await expectTaskOrder(page, "#active-tasks-list", allActiveOrder);
+    await page.locator("#filters-toggle").click();
+    await expect(page.locator("#filters-panel")).toBeVisible();
+
+    await page.locator("#status-filter").selectOption("active");
+    await expectTaskOrder(page, "#active-tasks-list", allActiveOrder);
+
+    await page.locator("#status-filter").selectOption("overdue");
+    await expectTaskOrder(page, "#active-tasks-list", [
+      "E03 personal overdue",
+      "E03 school history overdue",
+      "E03 school math overdue target",
+    ]);
+
+    await page.locator("#direction-filter").selectOption("Школа");
+    await page
+      .locator("#subject-filter")
+      .selectOption(`subject:${mathSubjectId}`);
+    await expectTaskOrder(page, "#active-tasks-list", [
+      "E03 school math overdue target",
+    ]);
+
+    await page.locator("#filters-reset-button").click();
+    await expect(page.locator("#status-filter")).toHaveValue("all");
+    await expect(page.locator("#direction-filter")).toHaveValue("all");
+    await expect(page.locator("#subject-filter")).toHaveValue("all");
+    await expectTaskOrder(page, "#active-tasks-list", allActiveOrder);
+
+    await page.locator("#status-filter").selectOption("overdue");
+    await page.locator("#direction-filter").selectOption("Школа");
+    await page
+      .locator("#subject-filter")
+      .selectOption(`subject:${mathSubjectId}`);
+    await page.locator("#main-tab-archive").click();
+    await expect(page.locator("#main-panel-archive")).toBeVisible();
+    await expectTaskOrder(page, "#completed-tasks-list", [
+      "E03 completed server first",
+      "E03 completed server second",
+      "E03 completed server third",
+    ]);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E04 exposes an explicit contract error for invalid createdAt", async ({ page }) => {
+    const state = createMockState();
+
+    state.tasks[0].createdAt = "invalid-created-at";
+    const controller = createApiMockController({ state });
+
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+
+    await expect(page.locator("#login-panel")).toBeVisible();
+    await expect(page.locator("#main-interface")).toBeHidden();
+    await expect(page.locator("#active-tasks-list .task-card")).toHaveCount(0);
+    expectNoUnexpectedRequests(controller);
+    await expect(page.locator("#login-error")).toBeVisible();
+    await expect(page.locator("#login-error")).toHaveText(
+      "Сервер вернул некорректное состояние",
+    );
+  });
+});
+
 module.exports = {
   LOCAL_ORIGIN,
   createApiMockController,

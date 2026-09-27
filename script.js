@@ -1576,7 +1576,18 @@ class ApiError extends Error {
   }
 }
 
+class ServerContractError extends Error {
+  constructor(message = "Сервер вернул некорректное состояние") {
+    super(message);
+    this.name = "ServerContractError";
+  }
+}
+
 function getApiErrorMessage(error, fallback) {
+  if (error instanceof ServerContractError) {
+    return error.message;
+  }
+
   if (!(error instanceof ApiError)) {
     return fallback;
   }
@@ -1715,7 +1726,7 @@ function adaptServerState(value) {
     !tasksAreValid ||
     !Number.isInteger(value.syncVersion)
   ) {
-    throw new ApiError(0, value, "Сервер вернул некорректное состояние");
+    throw new ServerContractError("Сервер вернул некорректное состояние");
   }
 
   return {
