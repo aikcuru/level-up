@@ -805,6 +805,187 @@ async function installApiMock(page, controller) {
   });
 }
 
+function getRequestSequence(controller) {
+  return controller.requests.map(
+    ({ method, pathname }) => `${method} ${pathname}`,
+  );
+}
+
+function expectNoUnexpectedRequests(controller) {
+  controller.assertNoUnexpectedRequests();
+}
+
+test.describe("smoke/auth/state", () => {
+  test("restores an authenticated session and renders synthetic state", async ({ page }) => {
+    const controller = createApiMockController({ authenticated: true });
+
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(page.locator("#login-panel")).toBeHidden();
+    await expect(page.locator("#profile-name")).toHaveText(
+      controller.state.profile.displayName,
+    );
+    await expect(
+      page.locator("#active-tasks-list .task-card__title"),
+    ).toHaveText(controller.state.tasks[0].title);
+    await expect(page.locator("#task-form-status")).toBeHidden();
+    await expect(page.locator("#login-error")).toBeHidden();
+
+    await page.locator("#settings-button").click();
+    await expect(page.locator("#subjects-list")).toBeVisible();
+    await expect(page.locator("#subjects-list")).toContainText(
+      controller.state.subjects[0].name,
+    );
+
+    expect(getRequestSequence(controller)).toEqual([
+      "GET /api/v1/auth/me",
+      "POST /api/v1/auth/csrf",
+      "GET /api/v1/state",
+    ]);
+    expect(controller.errors).toEqual([]);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("shows login when there is no active session", async ({ page }) => {
+    const controller = createApiMockController({ authenticated: false });
+
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+
+    await expect(page.locator("#login-panel")).toBeVisible();
+    await expect(page.locator("#login-form")).toBeVisible();
+    await expect(page.locator("#main-interface")).toBeHidden();
+    await expect(page.locator("#active-tasks-list .task-card")).toHaveCount(0);
+
+    expect(getRequestSequence(controller)).toEqual([
+      "GET /api/v1/auth/me",
+    ]);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("logs in manually with synthetic credentials", async ({ page }) => {
+    const controller = createApiMockController({ authenticated: false });
+
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#login-panel")).toBeVisible();
+
+    await page.locator("#login-input").fill(controller.credentials.login);
+    await page.locator("#password-input").fill(controller.credentials.password);
+    await page.locator("#login-submit").click();
+
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(page.locator("#login-panel")).toBeHidden();
+    await expect(page.locator("#profile-name")).toHaveText(
+      controller.state.profile.displayName,
+    );
+    await expect(
+      page.locator("#active-tasks-list .task-card__title"),
+    ).toHaveText(controller.state.tasks[0].title);
+
+    expect(controller.auth.authenticated).toBe(true);
+    expect(controller.csrfToken).toBeTruthy();
+    expect(getRequestSequence(controller)).toEqual([
+      "GET /api/v1/auth/me",
+      "POST /api/v1/auth/login",
+      "GET /api/v1/state",
+    ]);
+
+    const loginRequest = controller.requests.find(
+      ({ method, pathname }) =>
+        method === "POST" && pathname === "/api/v1/auth/login",
+    );
+
+    expect(loginRequest.body).toEqual({
+      login: controller.credentials.login,
+      password: "[synthetic-redacted]",
+    });
+    expect(JSON.stringify(loginRequest)).not.toContain(
+      controller.credentials.password,
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("logs out and clears browser storage", async ({ page }) => {
+    const controller = createApiMockController({ authenticated: true });
+
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    const preferencesBeforeLogout = await page.evaluate(() =>
+      window.sessionStorage.getItem("level-up:ui-preferences"),
+    );
+
+    expect(preferencesBeforeLogout).not.toBeNull();
+
+    await page.locator("#logout-button").click();
+
+    await expect(page.locator("#login-panel")).toBeVisible();
+    await expect(page.locator("#main-interface")).toBeHidden();
+    expect(controller.auth.authenticated).toBe(false);
+    expect(getRequestSequence(controller)).toEqual([
+      "GET /api/v1/auth/me",
+      "POST /api/v1/auth/csrf",
+      "GET /api/v1/state",
+      "POST /api/v1/auth/logout",
+    ]);
+
+    const storageSnapshot = await page.evaluate(() => ({
+      preferences: window.sessionStorage.getItem("level-up:ui-preferences"),
+      sessionStorageLength: window.sessionStorage.length,
+      localStorageLength: window.localStorage.length,
+    }));
+
+    expect(storageSnapshot).toEqual({
+      preferences: null,
+      sessionStorageLength: 0,
+      localStorageLength: 0,
+    });
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("requires reauthentication when state loading returns 401", async ({ page }) => {
+    const controller = createApiMockController({ authenticated: true });
+
+    controller.setRouteOverride("GET", "/api/v1/state", async ({ route }) => {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({ detail: "Synthetic session expired" }),
+      });
+    });
+
+    await page.addInitScript(() => {
+      window.sessionStorage.setItem(
+        "level-up:ui-preferences",
+        JSON.stringify({ version: 1, activeMainTab: "calendar" }),
+      );
+    });
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+
+    await expect(page.locator("#login-panel")).toBeVisible();
+    await expect(page.locator("#main-interface")).toBeHidden();
+    await expect(page.locator("#login-error")).toBeVisible();
+    await expect(page.locator("#login-error")).toContainText(
+      "Сессия завершена",
+    );
+    expect(
+      await page.evaluate(() =>
+        window.sessionStorage.getItem("level-up:ui-preferences"),
+      ),
+    ).toBeNull();
+    expect(getRequestSequence(controller)).toEqual([
+      "GET /api/v1/auth/me",
+      "POST /api/v1/auth/csrf",
+      "GET /api/v1/state",
+    ]);
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
 module.exports = {
   LOCAL_ORIGIN,
   createApiMockController,
