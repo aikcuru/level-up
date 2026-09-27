@@ -1,0 +1,48 @@
+{
+  "profile": {
+    "userId": "test-user-001",
+    "displayName": "Тестовый пользователь",
+    "totalXp": 0,
+    "level": 1
+  },
+  "subjects": [
+    {
+      "id": "test-subject-history-001",
+      "name": "Тестовая история",
+      "normalizedName": "тестовая история",
+      "isSystem": false,
+      "version": 1,
+      "createdAt": "2026-09-01T08:01:00.000Z",
+      "updatedAt": "2026-09-01T08:01:00.000Z"
+    },
+    {
+      "id": "test-subject-math-001",
+      "name": "Тестовая математика",
+      "normalizedName": "тестовая математика",
+      "isSystem": false,
+      "version": 1,
+      "createdAt": "2026-09-01T08:00:00.000Z",
+      "updatedAt": "2026-09-01T08:00:00.000Z"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "test-task-active-001",
+      "title": "Решить тестовый пример",
+      "direction": "Школа",
+      "subjectId": "test-subject-math-001",
+      "difficulty": "medium",
+      "xpReward": 20,
+      "status": "active",
+      "originalDeadline": "2026-09-28",
+      "currentDeadline": "2026-09-28",
+      "postponementCount": 0,
+      "xpAwarded": false,
+      "version": 1,
+      "createdAt": "2026-09-01T09:00:00.000Z",
+      "updatedAt": "2026-09-01T09:00:00.000Z",
+      "deletedAt": null
+    }
+  ],
+  "syncVersion": 1
+}
