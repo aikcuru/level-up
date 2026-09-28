@@ -25,12 +25,4 @@ module.exports = defineConfig({
     },
   ],
 
-  webServer: {
-    command: "python -m http.server 4173 --bind 127.0.0.1",
-    url: "http://127.0.0.1:4173/index.html",
-    reuseExistingServer: false,
-    timeout: 15000,
-    stdout: "ignore",
-    stderr: "pipe",
-  },
 });
