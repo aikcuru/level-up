@@ -1294,6 +1294,24 @@ function createCalendarDayOverviewTask(task, todayParts) {
     item.append(overdue);
   }
 
+  if (task.status === "active") {
+    const actions = document.createElement("div");
+    const editButton = document.createElement("button");
+
+    actions.className = "task-card__actions";
+    editButton.className =
+      "task-card__action-button task-card__edit-button";
+    editButton.type = "button";
+    editButton.disabled = mutationPending;
+    editButton.textContent = "Редактировать";
+    editButton.addEventListener("click", () => {
+      setActiveMainTab("tasks");
+      startEditingTask(task.id);
+    });
+    actions.append(editButton);
+    item.append(actions);
+  }
+
   return item;
 }
 
@@ -2482,6 +2500,13 @@ async function saveEditedTask(values) {
     if (value !== currentValue) {
       payload[field] = value;
     }
+  }
+
+  if (Object.keys(payload).length === 1) {
+    setTaskFormCreateMode({ resetForm: true });
+    setTaskFormPanelOpen(false);
+    showTaskFormStatus("Изменений нет");
+    return;
   }
 
   setMutationPending(true);
