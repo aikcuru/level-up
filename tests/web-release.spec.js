@@ -1016,6 +1016,105 @@ async function expectTaskOrder(page, listSelector, expectedTitles) {
   await expect(titles).toHaveText(expectedTitles);
 }
 
+function createUiPreferences({
+  activeMainTab = "calendar",
+  status = "all",
+  direction = "all",
+  subject = "all",
+  mode = "month",
+  selectedDate = MATRIX_TODAY_KEY,
+} = {}) {
+  return {
+    version: 1,
+    activeMainTab,
+    filters: {
+      status,
+      direction,
+      subject,
+    },
+    calendar: {
+      mode,
+      selectedDate,
+    },
+  };
+}
+
+async function seedUiPreferences(page, preferences) {
+  await page.addInitScript((value) => {
+    window.sessionStorage.setItem(
+      "level-up:ui-preferences",
+      JSON.stringify(value),
+    );
+  }, preferences);
+}
+
+async function bootAuthenticatedCalendar(
+  page,
+  {
+    state = createMockState(),
+    preferences = createUiPreferences(),
+  } = {},
+) {
+  const controller = createApiMockController({ state });
+
+  await installMatrixClock(page);
+  await seedUiPreferences(page, preferences);
+  await installApiMock(page, controller);
+  await page.goto("/index.html");
+  await expect(page.locator("#main-interface")).toBeVisible();
+  await expect(page.locator("#main-panel-calendar")).toBeVisible();
+
+  return controller;
+}
+
+async function expectMainTabState(page, activeTabName) {
+  for (const tabName of ["tasks", "calendar", "archive"]) {
+    const isActive = tabName === activeTabName;
+    const tab = page.locator(`#main-tab-${tabName}`);
+    const panel = page.locator(`#main-panel-${tabName}`);
+
+    await expect(tab).toHaveAttribute("aria-selected", String(isActive));
+    await expect(tab).toHaveAttribute("tabindex", isActive ? "0" : "-1");
+
+    if (isActive) {
+      await expect(tab).toBeFocused();
+      await expect(panel).toBeVisible();
+    } else {
+      await expect(panel).toBeHidden();
+    }
+  }
+}
+
+async function expectCalendarOverviewOrder(page, expectedTitles) {
+  const titles = page.locator(
+    "#calendar-selected-tasks .calendar-day-task__title",
+  );
+
+  await expect(titles).toHaveCount(expectedTitles.length);
+  await expect(titles).toHaveText(expectedTitles);
+}
+
+function createTasksForCalendarDate({ date, count, prefix }) {
+  return Array.from({ length: count }, (_, index) => {
+    const taskNumber = index + 1;
+    const paddedNumber = String(taskNumber).padStart(2, "0");
+
+    return createSyntheticTask({
+      id: `test-${prefix}-${paddedNumber}`,
+      title: `${prefix} task ${taskNumber}`,
+      currentDeadline: date,
+      createdAt: `2026-08-${paddedNumber}T08:00:00.000Z`,
+    });
+  });
+}
+
+function getDescendingTaskTitles(prefix, count) {
+  return Array.from(
+    { length: count },
+    (_, index) => `${prefix} task ${count - index}`,
+  );
+}
+
 test.describe("E01-E04 required matrix", () => {
   test("E01 orders active tasks by current deadline", async ({ page }) => {
     const state = createMockState();
@@ -1331,6 +1430,508 @@ test.describe("E01-E04 required matrix", () => {
     await expect(page.locator("#login-error")).toHaveText(
       "Сервер вернул некорректное состояние",
     );
+  });
+});
+
+test.describe("E05-E09 required matrix", () => {
+  test("E05 preserves task draft and filters across main tabs without API requests", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+
+    await page.locator("#task-form-toggle").click();
+    await page.locator("#task-title-input").fill("E05 synthetic draft");
+    await page.locator("#task-direction-select").selectOption("Школа");
+    await page
+      .locator("#task-subject-select")
+      .selectOption("test-subject-math-001");
+    await page.locator("#task-difficulty-select").selectOption("hard");
+    await page.locator("#task-deadline-input").fill("2026-10-05");
+
+    await page.locator("#filters-toggle").click();
+    await page.locator("#status-filter").selectOption("overdue");
+    await page.locator("#direction-filter").selectOption("Школа");
+    await page
+      .locator("#subject-filter")
+      .selectOption("subject:test-subject-math-001");
+
+    const requestCountAfterBoot = controller.requests.length;
+
+    await page.locator("#main-tab-calendar").click();
+    await expect(page.locator("#main-panel-calendar")).toBeVisible();
+    await page.locator("#main-tab-archive").click();
+    await expect(page.locator("#main-panel-archive")).toBeVisible();
+    await page.locator("#main-tab-tasks").click();
+
+    await expect(page.locator("#main-tab-tasks")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.locator("#main-panel-tasks")).toBeVisible();
+    await expect(page.locator("#main-panel-calendar")).toBeHidden();
+    await expect(page.locator("#main-panel-archive")).toBeHidden();
+    await expect(page.locator("#task-form")).toHaveCount(1);
+    await expect(page.locator("#task-title-input")).toHaveValue(
+      "E05 synthetic draft",
+    );
+    await expect(page.locator("#task-direction-select")).toHaveValue("Школа");
+    await expect(page.locator("#task-subject-select")).toHaveValue(
+      "test-subject-math-001",
+    );
+    await expect(page.locator("#task-difficulty-select")).toHaveValue("hard");
+    await expect(page.locator("#task-deadline-input")).toHaveValue(
+      "2026-10-05",
+    );
+    await expect(page.locator("#status-filter")).toHaveValue("overdue");
+    await expect(page.locator("#direction-filter")).toHaveValue("Школа");
+    await expect(page.locator("#subject-filter")).toHaveValue(
+      "subject:test-subject-math-001",
+    );
+    expect(controller.requests).toHaveLength(requestCountAfterBoot);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E06 supports Arrow, Home, and End navigation with correct tab ARIA", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+
+    await page.locator("#main-tab-tasks").focus();
+    await expectMainTabState(page, "tasks");
+
+    await page.keyboard.press("ArrowRight");
+    await expectMainTabState(page, "calendar");
+
+    await page.keyboard.press("ArrowRight");
+    await expectMainTabState(page, "archive");
+
+    await page.keyboard.press("ArrowLeft");
+    await expectMainTabState(page, "calendar");
+
+    await page.keyboard.press("Home");
+    await expectMainTabState(page, "tasks");
+
+    await page.keyboard.press("End");
+    await expectMainTabState(page, "archive");
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E06 closes Settings with Escape and restores focus", async ({ page }) => {
+    const controller = createApiMockController();
+
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+
+    await page.locator("#settings-button").click();
+    await expect(page.locator("#settings-panel")).toBeVisible();
+    await expect(page.locator("#settings-button")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    await page.keyboard.press("Escape");
+
+    await expect(page.locator("#settings-panel")).toBeHidden();
+    await expect(page.locator("#settings-button")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await expect(page.locator("#settings-button")).toBeFocused();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E06 does not duplicate calendar navigation handlers after repeat visits", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    const requestCountAfterBoot = controller.requests.length;
+
+    await page.locator("#main-tab-calendar").click();
+    await page.locator("#main-tab-tasks").click();
+    await page.locator("#main-tab-calendar").click();
+    await expect(page.locator("#calendar-month")).toHaveText("сентябрь 2026");
+
+    await page.locator("#calendar-next").click();
+
+    await expect(page.locator("#calendar-month")).toHaveText("октябрь 2026");
+    await expect(
+      page.locator('.calendar-day[data-date="2026-10-18"]'),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(controller.requests).toHaveLength(requestCountAfterBoot);
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E07 calendar arithmetic and safe boundaries", () => {
+  test("E07 renders 28 days in February of a non-leap year", async ({ page }) => {
+    const controller = await bootAuthenticatedCalendar(page, {
+      preferences: createUiPreferences({ selectedDate: "2027-02-15" }),
+    });
+
+    await expect(page.locator("#calendar-month")).toHaveText("февраль 2027");
+    await expect(page.locator("#calendar-grid .calendar-day")).toHaveCount(28);
+    await expect(
+      page.locator('.calendar-day[data-date="2027-02-28"]'),
+    ).toHaveCount(1);
+    await expect(
+      page.locator('.calendar-day[data-date="2027-02-29"]'),
+    ).toHaveCount(0);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E07 renders 29 days in February of a leap year", async ({ page }) => {
+    const controller = await bootAuthenticatedCalendar(page, {
+      preferences: createUiPreferences({ selectedDate: "2028-02-15" }),
+    });
+
+    await expect(page.locator("#calendar-month")).toHaveText("февраль 2028");
+    await expect(page.locator("#calendar-grid .calendar-day")).toHaveCount(29);
+    await expect(
+      page.locator('.calendar-day[data-date="2028-02-29"]'),
+    ).toHaveCount(1);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E07 clamps January 31 to the last day of February", async ({ page }) => {
+    const controller = await bootAuthenticatedCalendar(page, {
+      preferences: createUiPreferences({ selectedDate: "2027-01-31" }),
+    });
+
+    await page.locator("#calendar-next").click();
+
+    await expect(page.locator("#calendar-month")).toHaveText("февраль 2027");
+    await expect(
+      page.locator('.calendar-day[data-date="2027-02-28"]'),
+    ).toHaveAttribute("aria-selected", "true");
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E07 clamps March 31 to April 30", async ({ page }) => {
+    const controller = await bootAuthenticatedCalendar(page, {
+      preferences: createUiPreferences({ selectedDate: "2027-03-31" }),
+    });
+
+    await page.locator("#calendar-next").click();
+
+    await expect(page.locator("#calendar-month")).toHaveText("апрель 2027");
+    await expect(
+      page.locator('.calendar-day[data-date="2027-04-30"]'),
+    ).toHaveAttribute("aria-selected", "true");
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E07 renders a seven-day week across the year boundary", async ({ page }) => {
+    const controller = await bootAuthenticatedCalendar(page, {
+      preferences: createUiPreferences({
+        mode: "week",
+        selectedDate: "2027-01-01",
+      }),
+    });
+    const weekDays = page.locator("#calendar-grid .calendar-week-day[data-date]");
+
+    await expect(page.locator("#calendar-month")).toHaveText(
+      "28 декабря 2026 — 3 января 2027",
+    );
+    await expect(weekDays).toHaveCount(7);
+    expect(await weekDays.evaluateAll((elements) =>
+      elements.map((element) => element.dataset.date),
+    )).toEqual([
+      "2026-12-28",
+      "2026-12-29",
+      "2026-12-30",
+      "2026-12-31",
+      "2027-01-01",
+      "2027-01-02",
+      "2027-01-03",
+    ]);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E07 disables Previous at 0001-01-01 without wrapping", async ({ page }) => {
+    const controller = await bootAuthenticatedCalendar(page, {
+      preferences: createUiPreferences({
+        mode: "day",
+        selectedDate: "0001-01-01",
+      }),
+    });
+
+    await expect(page.locator("#calendar-month")).toHaveText("1 января 1");
+    await expect(page.locator("#calendar-previous")).toBeDisabled();
+    await expect(page.locator("#calendar-next")).toBeEnabled();
+    await expect(page.locator("#calendar-selected-date")).toHaveText(
+      "Задачи на 1 января 1 года",
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E07 disables Next at 9999-12-31 without wrapping", async ({ page }) => {
+    const controller = await bootAuthenticatedCalendar(page, {
+      preferences: createUiPreferences({
+        mode: "day",
+        selectedDate: "9999-12-31",
+      }),
+    });
+
+    await expect(page.locator("#calendar-month")).toHaveText(
+      "31 декабря 9999",
+    );
+    await expect(page.locator("#calendar-previous")).toBeEnabled();
+    await expect(page.locator("#calendar-next")).toBeDisabled();
+    await expect(page.locator("#calendar-selected-date")).toHaveText(
+      "Задачи на 31 декабря 9999 года",
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E08-E09 calendar task rendering", () => {
+  test("E08 handles 0, 1, 3, 4, and 6 tasks with exact Month overflow", async ({
+    page,
+  }) => {
+    const state = createMockState();
+    const dates = {
+      empty: "2026-09-09",
+      one: "2026-09-10",
+      three: "2026-09-11",
+      four: "2026-09-12",
+      six: "2026-09-13",
+    };
+    const oneTask = createTasksForCalendarDate({
+      date: dates.one,
+      count: 1,
+      prefix: "e08-one",
+    });
+    const threeTasks = createTasksForCalendarDate({
+      date: dates.three,
+      count: 3,
+      prefix: "e08-three",
+    });
+    const fourTasks = createTasksForCalendarDate({
+      date: dates.four,
+      count: 4,
+      prefix: "e08-four",
+    });
+    const sixTasks = createTasksForCalendarDate({
+      date: dates.six,
+      count: 6,
+      prefix: "e08-six",
+    });
+
+    state.tasks = [
+      ...fourTasks,
+      ...oneTask,
+      ...sixTasks,
+      ...threeTasks,
+    ];
+    const controller = await bootAuthenticatedCalendar(page, {
+      state,
+      preferences: createUiPreferences({ selectedDate: MATRIX_TODAY_KEY }),
+    });
+    const emptyCell = page.locator(
+      `.calendar-day[data-date="${dates.empty}"]`,
+    );
+    await emptyCell.click();
+    await expect(emptyCell).toHaveAttribute("aria-selected", "true");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator("#calendar-day-overview")).toBeVisible();
+    await expect(page.locator("#calendar-selected-empty")).toBeVisible();
+    await expectCalendarOverviewOrder(page, []);
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    const oneCell = page.locator(
+      `.calendar-day[data-date="${dates.one}"]`,
+    );
+    const oneTaskPill = oneCell.locator(".calendar-task");
+
+    await expect(oneTaskPill).toHaveCount(1);
+    await oneTaskPill.click();
+    await expect(emptyCell).toHaveAttribute("aria-selected", "true");
+    await expect(oneCell).toHaveAttribute("aria-selected", "false");
+    await expect(oneTaskPill).toHaveAttribute(
+      "aria-describedby",
+      "calendar-task-tooltip",
+    );
+    await expect(page.locator("#calendar-task-tooltip")).toBeVisible();
+    await oneTaskPill.press("Escape");
+    await expect(page.locator("#calendar-task-tooltip")).toBeHidden();
+
+    await oneCell.locator(".calendar-day__button").click();
+    await expect(page.locator("#calendar-selected-empty")).toBeHidden();
+    await expectCalendarOverviewOrder(
+      page,
+      getDescendingTaskTitles("e08-one", 1),
+    );
+
+    const threeCell = page.locator(
+      `.calendar-day[data-date="${dates.three}"]`,
+    );
+
+    await expect(threeCell.locator(".calendar-task")).toHaveCount(3);
+    await expect(threeCell.locator(".calendar-day__more")).toHaveCount(0);
+    await threeCell.locator(".calendar-day__button").click();
+    await expectCalendarOverviewOrder(
+      page,
+      getDescendingTaskTitles("e08-three", 3),
+    );
+
+    const fourCell = page.locator(
+      `.calendar-day[data-date="${dates.four}"]`,
+    );
+
+    await expect(fourCell.locator(".calendar-task")).toHaveCount(3);
+    await expect(fourCell.locator(".calendar-day__more")).toHaveText(
+      "+ ещё 1",
+    );
+    await fourCell.locator(".calendar-day__button").click();
+    await expectCalendarOverviewOrder(
+      page,
+      getDescendingTaskTitles("e08-four", 4),
+    );
+
+    const sixCell = page.locator(
+      `.calendar-day[data-date="${dates.six}"]`,
+    );
+
+    await expect(sixCell.locator(".calendar-task")).toHaveCount(3);
+    await expect(sixCell.locator(".calendar-day__more")).toHaveText(
+      "+ ещё 3",
+    );
+    await sixCell.locator(".calendar-day__button").click();
+    await expectCalendarOverviewOrder(
+      page,
+      getDescendingTaskTitles("e08-six", 6),
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator("#calendar-day-overview")).toBeVisible();
+    await expectCalendarOverviewOrder(
+      page,
+      getDescendingTaskTitles("e08-six", 6),
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E09 keeps the same task set and order in Month, Week, and Day", async ({
+    page,
+  }) => {
+    const selectedDate = "2026-09-21";
+    const state = createMockState();
+    const tasks = [
+      createSyntheticTask({
+        id: "test-e09-002",
+        title: "E09 school math older",
+        direction: "Школа",
+        subjectId: "test-subject-math-001",
+        currentDeadline: selectedDate,
+        createdAt: "2026-09-02T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e09-001",
+        title: "E09 personal oldest",
+        direction: "Личные дела",
+        subjectId: null,
+        currentDeadline: selectedDate,
+        createdAt: "2026-09-01T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e09-004",
+        title: "E09 school math newest id 004",
+        direction: "Школа",
+        subjectId: "test-subject-math-001",
+        currentDeadline: selectedDate,
+        createdAt: "2026-09-03T08:00:00.000Z",
+      }),
+      createSyntheticTask({
+        id: "test-e09-003",
+        title: "E09 course history newest id 003",
+        direction: "Курс",
+        subjectId: "test-subject-history-001",
+        currentDeadline: selectedDate,
+        createdAt: "2026-09-03T08:00:00.000Z",
+      }),
+    ];
+    const expectedTitles = [
+      "E09 school math newest id 004",
+      "E09 course history newest id 003",
+      "E09 school math older",
+      "E09 personal oldest",
+    ];
+
+    state.tasks = tasks;
+    const controller = await bootAuthenticatedCalendar(page, {
+      state,
+      preferences: createUiPreferences({ selectedDate }),
+    });
+    const requestCountAfterBoot = controller.requests.length;
+
+    await expect(
+      page.locator(`.calendar-day[data-date="${selectedDate}"]`),
+    ).toHaveAttribute("aria-selected", "true");
+    await expectCalendarOverviewOrder(page, expectedTitles);
+
+    await page.locator('[data-calendar-mode="week"]').click();
+    const selectedWeekDay = page.locator(
+      `.calendar-week-day[data-date="${selectedDate}"]`,
+    );
+
+    await expect(page.locator(".calendar")).toHaveAttribute(
+      "data-calendar-mode",
+      "week",
+    );
+    await expect(selectedWeekDay).toHaveAttribute("aria-selected", "true");
+    await expect(
+      selectedWeekDay.locator(".calendar-task__title"),
+    ).toHaveText(expectedTitles);
+    await expectCalendarOverviewOrder(page, expectedTitles);
+
+    await page.locator('[data-calendar-mode="day"]').click();
+    await expect(page.locator(".calendar")).toHaveAttribute(
+      "data-calendar-mode",
+      "day",
+    );
+    await expect(page.locator("#calendar-month")).toHaveText(
+      "21 сентября 2026",
+    );
+    await expectCalendarOverviewOrder(page, expectedTitles);
+
+    await page.locator("#main-tab-tasks").click();
+    await page.locator("#filters-toggle").click();
+    await page.locator("#direction-filter").selectOption("Школа");
+    await page
+      .locator("#subject-filter")
+      .selectOption("subject:test-subject-math-001");
+    await expectTaskOrder(page, "#active-tasks-list", [
+      "E09 school math newest id 004",
+      "E09 school math older",
+    ]);
+
+    await page.locator("#main-tab-calendar").click();
+    await expect(page.locator(".calendar")).toHaveAttribute(
+      "data-calendar-mode",
+      "day",
+    );
+    await expect(page.locator("#calendar-month")).toHaveText(
+      "21 сентября 2026",
+    );
+    await expectCalendarOverviewOrder(page, expectedTitles);
+    expect(controller.requests).toHaveLength(requestCountAfterBoot);
+    expectNoUnexpectedRequests(controller);
   });
 });
 
