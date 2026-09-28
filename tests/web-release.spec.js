@@ -1935,6 +1935,756 @@ test.describe("E08-E09 calendar task rendering", () => {
   });
 });
 
+function createDeferred() {
+  let resolvePromise;
+  let isSettled = false;
+  const promise = new Promise((resolve) => {
+    resolvePromise = resolve;
+  });
+
+  return {
+    promise,
+    resolve(value) {
+      if (!isSettled) {
+        isSettled = true;
+        resolvePromise(value);
+      }
+    },
+  };
+}
+
+function createSingleActiveTaskState(task) {
+  const state = createMockState();
+
+  state.tasks = [task];
+  state.profile.totalXp = 0;
+  state.profile.level = 1;
+  state.syncVersion = 1;
+  return state;
+}
+
+async function bootAuthenticatedTasks(page, controller) {
+  await installMatrixClock(page);
+  await installApiMock(page, controller);
+  await page.goto("/index.html");
+  await expect(page.locator("#main-interface")).toBeVisible();
+  await expect(page.locator("#main-panel-tasks")).toBeVisible();
+}
+
+function getTaskCard(page, listSelector, title) {
+  return page.locator(`${listSelector} .task-card`).filter({ hasText: title });
+}
+
+function getRouteRequests(controller, method, pathname) {
+  return controller.requests.filter(
+    (request) => request.method === method && request.pathname === pathname,
+  );
+}
+
+async function openTaskEditor(page, title) {
+  const card = getTaskCard(page, "#active-tasks-list", title);
+
+  await card.locator(".task-card__edit-button").click();
+  await expect(page.locator("#task-form-heading")).toHaveText(
+    "Редактирование задачи",
+  );
+  await expect(page.locator("#task-title-input")).toBeFocused();
+}
+
+test.describe("E10 mutation lifecycle", () => {
+  test("E10 updates only deadline after mutation response and fresh state", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e10-deadline-001",
+      title: "E10 deadline task",
+      currentDeadline: "2026-09-18",
+      version: 4,
+      createdAt: "2026-09-01T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}`;
+    const mutationGate = createDeferred();
+    let capturedBody = null;
+
+    controller.setRouteOverride(
+      "PATCH",
+      pathname,
+      async ({ route, request, controller: activeController, body }) => {
+        capturedBody = deepClone(body);
+        await mutationGate.promise;
+        await handleUpdateTask(
+          route,
+          activeController,
+          request,
+          { method: "PATCH", pathname },
+          { present: true, valid: true, value: body },
+          task.id,
+        );
+      },
+    );
+
+    await bootAuthenticatedTasks(page, controller);
+    const requestStartIndex = controller.requests.length;
+    await openTaskEditor(page, task.title);
+    await page.locator("#task-deadline-input").fill("2026-09-20");
+
+    try {
+      await page.locator("#task-form-submit").click();
+      await expect.poll(() => capturedBody).not.toBeNull();
+
+      expect(capturedBody).toEqual({
+        version: 4,
+        deadline: "2026-09-20",
+      });
+      await expect(
+        getTaskCard(page, "#active-tasks-list", task.title),
+      ).toContainText("18.09.2026");
+      expect(controller.state.tasks[0].currentDeadline).toBe("2026-09-18");
+    } finally {
+      mutationGate.resolve();
+    }
+
+    await expect(page.locator("#task-form-status")).toHaveText(
+      "Изменения сохранены",
+    );
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title),
+    ).toContainText("20.09.2026");
+    expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
+    expect(
+      controller.requests.slice(requestStartIndex).map(
+        ({ method, pathname: requestPath }) => `${method} ${requestPath}`,
+      ),
+    ).toEqual([`PATCH ${pathname}`, "GET /api/v1/state"]);
+
+    await page.locator("#main-tab-calendar").click();
+    await expect(
+      page.locator(
+        '.calendar-day[data-date="2026-09-20"] .calendar-task__title',
+      ),
+    ).toHaveText(task.title);
+    await expect(
+      page.locator(
+        '.calendar-day[data-date="2026-09-18"] .calendar-task__title',
+      ),
+    ).toHaveCount(0);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E10 completes once and renders authoritative archive and XP state", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e10-complete-001",
+      title: "E10 complete task",
+      difficulty: "hard",
+      xpReward: 50,
+      currentDeadline: MATRIX_TODAY_KEY,
+      xpAwarded: false,
+      version: 3,
+      createdAt: "2026-09-02T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}/complete`;
+    const mutationGate = createDeferred();
+    let capturedRequest = null;
+
+    controller.setRouteOverride(
+      "POST",
+      pathname,
+      async ({ route, request, controller: activeController, body }) => {
+        capturedRequest = {
+          body: deepClone(body),
+          csrf: request.headers()["x-csrf-token"],
+        };
+        await mutationGate.promise;
+        await handleCompleteTask(
+          route,
+          activeController,
+          request,
+          { method: "POST", pathname },
+          { present: true, valid: true, value: body },
+          task.id,
+        );
+      },
+    );
+
+    await bootAuthenticatedTasks(page, controller);
+    const requestStartIndex = controller.requests.length;
+    const activeCard = getTaskCard(page, "#active-tasks-list", task.title);
+
+    try {
+      await activeCard.locator(".task-card__complete-button").click();
+      await expect.poll(() => capturedRequest).not.toBeNull();
+
+      expect(capturedRequest).toEqual({
+        body: { version: 3 },
+        csrf: TEST_CSRF_TOKEN,
+      });
+      await expect(activeCard).not.toHaveClass(/task-card--completed/);
+      await expect(activeCard.locator(".task-badge")).toContainText("Активная");
+      expect(controller.state.tasks[0].status).toBe("active");
+    } finally {
+      mutationGate.resolve();
+    }
+
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title),
+    ).toHaveCount(0);
+    expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+    expect(
+      controller.requests.slice(requestStartIndex).map(
+        ({ method, pathname: requestPath }) => `${method} ${requestPath}`,
+      ),
+    ).toEqual([`POST ${pathname}`, "GET /api/v1/state"]);
+    await expect(page.locator("#profile-total-xp")).toHaveText("50");
+    await expect(page.locator("#profile-level")).toHaveText("1");
+    await expect(page.locator("#profile-progress-text")).toHaveText(
+      "50 из 100 XP",
+    );
+    await expect(page.locator("#profile-progress")).toHaveAttribute(
+      "aria-valuenow",
+      "50",
+    );
+
+    await page.locator("#main-tab-archive").click();
+    await expect(
+      getTaskCard(page, "#completed-tasks-list", task.title),
+    ).toBeVisible();
+    await page.locator("#main-tab-calendar").click();
+    await expect(
+      page.locator(
+        `.calendar-day[data-date="${MATRIX_TODAY_KEY}"] .calendar-task__title`,
+      ),
+    ).toHaveCount(0);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E10 deletes once only after response and fresh state", async ({ page }) => {
+    const task = createSyntheticTask({
+      id: "test-e10-delete-001",
+      title: "E10 delete task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 6,
+      createdAt: "2026-09-03T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}`;
+    const mutationGate = createDeferred();
+    let capturedBody = null;
+
+    controller.setRouteOverride(
+      "DELETE",
+      pathname,
+      async ({ route, request, controller: activeController, body }) => {
+        capturedBody = deepClone(body);
+        await mutationGate.promise;
+        await handleDeleteTask(
+          route,
+          activeController,
+          request,
+          { method: "DELETE", pathname },
+          { present: true, valid: true, value: body },
+          task.id,
+        );
+      },
+    );
+
+    await bootAuthenticatedTasks(page, controller);
+    const requestStartIndex = controller.requests.length;
+    const activeCard = getTaskCard(page, "#active-tasks-list", task.title);
+    page.once("dialog", (dialog) => dialog.accept());
+
+    try {
+      await activeCard.locator(".task-card__delete-button").click();
+      await expect.poll(() => capturedBody).not.toBeNull();
+
+      expect(capturedBody).toEqual({ version: 6 });
+      await expect(activeCard).toBeVisible();
+      expect(controller.state.tasks).toHaveLength(1);
+    } finally {
+      mutationGate.resolve();
+    }
+
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title),
+    ).toHaveCount(0);
+    expect(getRouteRequests(controller, "DELETE", pathname)).toHaveLength(1);
+    expect(
+      controller.requests.slice(requestStartIndex).map(
+        ({ method, pathname: requestPath }) => `${method} ${requestPath}`,
+      ),
+    ).toEqual([`DELETE ${pathname}`, "GET /api/v1/state"]);
+
+    await page.locator("#main-tab-calendar").click();
+    await expect(
+      page.locator(
+        `.calendar-day[data-date="${MATRIX_TODAY_KEY}"] .calendar-task__title`,
+      ),
+    ).toHaveCount(0);
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E11 editing contracts", () => {
+  test("E11 starts editing directly from Calendar with the shared focused form", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e11-calendar-edit-001",
+      title: "E11 calendar edit task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 2,
+      createdAt: "2026-09-04T08:00:00.000Z",
+    });
+    const state = createSingleActiveTaskState(task);
+    const controller = createApiMockController({ state });
+
+    await installMatrixClock(page);
+    await seedUiPreferences(
+      page,
+      createUiPreferences({ mode: "day", selectedDate: MATRIX_TODAY_KEY }),
+    );
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-panel-calendar")).toBeVisible();
+    const overviewTask = page
+      .locator("#calendar-selected-tasks .calendar-day-task")
+      .filter({ hasText: task.title });
+    const editButton = overviewTask.getByRole("button", {
+      name: "Редактировать",
+    });
+
+    await expect(editButton).toBeVisible();
+    await editButton.click();
+    await expect(page.locator("#main-panel-tasks")).toBeVisible();
+    await expect(page.locator("#task-form-heading")).toHaveText(
+      "Редактирование задачи",
+    );
+    await expect(page.locator("#task-title-input")).toHaveValue(task.title);
+    await expect(page.locator("#task-title-input")).toBeFocused();
+    await page.locator("#main-tab-calendar").click();
+    await expect(page.locator(".calendar")).toHaveAttribute(
+      "data-calendar-mode",
+      "day",
+    );
+    await expect(page.locator("#calendar-month")).toHaveText(
+      "18 сентября 2026",
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E11 sends the task version captured when editing opened", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e11-version-001",
+      title: "E11 version task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 7,
+      createdAt: "2026-09-05T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}`;
+
+    await bootAuthenticatedTasks(page, controller);
+    await openTaskEditor(page, task.title);
+    controller.state.tasks[0].version = 8;
+    controller.state.tasks[0].title = "E11 authoritative task";
+    controller.state.syncVersion += 1;
+    await page.locator("#task-deadline-input").fill("2026-09-19");
+    await page.locator("#task-form-submit").click();
+
+    await expect(page.locator("#task-form-status")).toContainText(
+      "Задача изменилась в другом месте",
+    );
+    const patchRequests = getRouteRequests(controller, "PATCH", pathname);
+
+    expect(patchRequests).toHaveLength(1);
+    expect(patchRequests[0].body).toEqual({
+      version: 7,
+      deadline: "2026-09-19",
+    });
+    await expect(page.locator("#task-form-panel")).toBeHidden();
+    await expect(
+      getTaskCard(page, "#active-tasks-list", "E11 authoritative task"),
+    ).toBeVisible();
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E11 does not PATCH an unchanged edit and reports no changes", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e11-unchanged-001",
+      title: "E11 unchanged task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 5,
+      createdAt: "2026-09-06T08:00:00.000Z",
+    });
+    const state = createSingleActiveTaskState(task);
+    const controller = createApiMockController({ state });
+    const pathname = `/api/v1/tasks/${task.id}`;
+    const initialVersion = controller.state.tasks[0].version;
+    const initialSyncVersion = controller.state.syncVersion;
+
+    await bootAuthenticatedTasks(page, controller);
+    await openTaskEditor(page, task.title);
+    await page.locator("#task-form-submit").click();
+    await expect(page.locator("#task-form-status")).toBeVisible();
+
+    expect.soft(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(0);
+    await expect.soft(page.locator("#task-form-status")).toHaveText(
+      "Изменений нет",
+    );
+    expect.soft(controller.state.tasks[0].version).toBe(initialVersion);
+    expect.soft(controller.state.syncVersion).toBe(initialSyncVersion);
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E12 mutation error handling", () => {
+  test("E12 handles mutation 401 once and requires reauthentication", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e12-401-001",
+      title: "E12 401 task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 2,
+      createdAt: "2026-09-07T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}/complete`;
+
+    controller.setRouteOverride("POST", pathname, async ({ route }) => {
+      await fulfillApiError(
+        route,
+        controller,
+        { method: "POST", pathname },
+        401,
+        "Synthetic session expired",
+      );
+    });
+
+    await bootAuthenticatedTasks(page, controller);
+    await page.evaluate(() => {
+      window.sessionStorage.setItem(
+        "level-up:ui-preferences",
+        JSON.stringify({ version: 1, activeMainTab: "tasks" }),
+      );
+    });
+    await getTaskCard(page, "#active-tasks-list", task.title)
+      .locator(".task-card__complete-button")
+      .click();
+
+    await expect(page.locator("#login-panel")).toBeVisible();
+    await expect(page.locator("#main-interface")).toBeHidden();
+    await expect(page.locator("#login-error")).toContainText(
+      "Сессия завершена",
+    );
+    expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+    expect(
+      await page.evaluate(() =>
+        window.sessionStorage.getItem("level-up:ui-preferences"),
+      ),
+    ).toBeNull();
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E12 handles mutation 403 once without storing CSRF", async ({ page }) => {
+    const task = createSyntheticTask({
+      id: "test-e12-403-001",
+      title: "E12 403 task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 2,
+      createdAt: "2026-09-08T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}/complete`;
+
+    controller.setRouteOverride("POST", pathname, async ({ route }) => {
+      await fulfillApiError(
+        route,
+        controller,
+        { method: "POST", pathname },
+        403,
+        "Invalid CSRF token",
+      );
+    });
+
+    await bootAuthenticatedTasks(page, controller);
+    await getTaskCard(page, "#active-tasks-list", task.title)
+      .locator(".task-card__complete-button")
+      .click();
+
+    await expect(page.locator("#task-form-status")).toContainText(
+      "Сервер отклонил запрос",
+    );
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title),
+    ).toBeVisible();
+    expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+    const storageText = await page.evaluate(() =>
+      JSON.stringify({
+        sessionStorage: { ...window.sessionStorage },
+        localStorage: { ...window.localStorage },
+      }),
+    );
+    expect(storageText).not.toContain(TEST_CSRF_TOKEN);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E12 handles mutation 409 once and reloads authoritative state", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e12-409-001",
+      title: "E12 conflict task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 3,
+      createdAt: "2026-09-09T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}`;
+
+    controller.setRouteOverride("PATCH", pathname, async ({ route }) => {
+      controller.state.tasks[0].title = "E12 authoritative conflict task";
+      controller.state.tasks[0].version += 1;
+      controller.state.syncVersion += 1;
+      await fulfillApiError(
+        route,
+        controller,
+        { method: "PATCH", pathname },
+        409,
+        "Task version is stale",
+      );
+    });
+
+    await bootAuthenticatedTasks(page, controller);
+    const requestStartIndex = controller.requests.length;
+    await openTaskEditor(page, task.title);
+    await page.locator("#task-deadline-input").fill("2026-09-20");
+    await page.locator("#task-form-submit").click();
+
+    await expect(page.locator("#task-form-status")).toContainText(
+      "Задача изменилась в другом месте",
+    );
+    await expect(page.locator("#task-form-panel")).toBeHidden();
+    await expect(
+      getTaskCard(
+        page,
+        "#active-tasks-list",
+        "E12 authoritative conflict task",
+      ),
+    ).toBeVisible();
+    expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
+    expect(
+      controller.requests.slice(requestStartIndex).map(
+        ({ method, pathname: requestPath }) => `${method} ${requestPath}`,
+      ),
+    ).toEqual([`PATCH ${pathname}`, "GET /api/v1/state"]);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E12 handles one mutation network failure without retry", async ({ page }) => {
+    const task = createSyntheticTask({
+      id: "test-e12-network-001",
+      title: "E12 network task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 2,
+      createdAt: "2026-09-10T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}/complete`;
+
+    controller.setRouteOverride("POST", pathname, async ({ route }) => {
+      await route.abort("failed");
+    });
+
+    await bootAuthenticatedTasks(page, controller);
+    await getTaskCard(page, "#active-tasks-list", task.title)
+      .locator(".task-card__complete-button")
+      .click();
+
+    await expect(page.locator("#task-form-status")).toHaveText(
+      "Не удалось связаться с сервером. Проверьте соединение и повторите попытку.",
+    );
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title),
+    ).toBeVisible();
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title).locator(
+        ".task-card__complete-button",
+      ),
+    ).toBeEnabled();
+    expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E12 handles a 15-second task mutation timeout with read-only verification", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e12-timeout-001",
+      title: "E12 timeout task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 2,
+      createdAt: "2026-09-10T09:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}/complete`;
+    const mutationGate = createDeferred();
+
+    controller.setRouteOverride("POST", pathname, async ({ route }) => {
+      await mutationGate.promise;
+      await route.abort("failed").catch(() => {});
+    });
+
+    await bootAuthenticatedTasks(page, controller);
+    await page.clock.pauseAt(new Date(MATRIX_FIXED_TIME_MS + 1_000));
+    const activeCard = getTaskCard(page, "#active-tasks-list", task.title);
+    const completeButton = activeCard.locator(".task-card__complete-button");
+
+    try {
+      await completeButton.click();
+      await expect
+        .poll(() => getRouteRequests(controller, "POST", pathname).length)
+        .toBe(1);
+      await page.clock.fastForward(14_999);
+      await expect(page.locator("#task-form-status")).toBeHidden();
+      await page.clock.fastForward(1);
+      await expect(page.locator("#task-form-status")).toHaveText(
+        "Не удалось подтвердить результат операции. Проверьте актуальные данные перед повтором.",
+      );
+      const verifyButton = page.getByRole("button", {
+        name: "Проверить данные",
+      });
+
+      await expect(verifyButton).toBeVisible();
+      await expect(verifyButton).toBeEnabled();
+      await expect(completeButton).toBeDisabled();
+      await expect(
+        activeCard.locator(".task-card__edit-button"),
+      ).toBeDisabled();
+      await expect(
+        activeCard.locator(".task-card__delete-button"),
+      ).toBeDisabled();
+      await expect(page.locator("#task-form-submit")).toBeDisabled();
+      expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+      expect(
+        getRouteRequests(controller, "GET", "/api/v1/state"),
+      ).toHaveLength(1);
+
+      await verifyButton.click();
+      await expect(page.locator("#task-form-status")).toHaveText(
+        "Данные обновлены. Проверьте результат операции перед повтором.",
+      );
+      await expect(
+        getTaskCard(page, "#active-tasks-list", task.title),
+      ).toBeVisible();
+      await expect(
+        getTaskCard(page, "#active-tasks-list", task.title).locator(
+          ".task-card__complete-button",
+        ),
+      ).toBeEnabled();
+      expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+      expect(
+        getRouteRequests(controller, "GET", "/api/v1/state"),
+      ).toHaveLength(2);
+      expectNoUnexpectedRequests(controller);
+    } finally {
+      mutationGate.resolve();
+    }
+  });
+});
+
+test.describe("E13 accepted mutation with failed state refresh", () => {
+  test("E13 reports accepted mutation separately and offers read-only retry", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e13-refresh-001",
+      title: "E13 refresh task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 4,
+      createdAt: "2026-09-11T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}`;
+    let stateReadCount = 0;
+
+    controller.setRouteOverride("GET", "/api/v1/state", async ({ route }) => {
+      stateReadCount += 1;
+
+      if (stateReadCount === 2) {
+        await fulfillApiError(
+          route,
+          controller,
+          { method: "GET", pathname: "/api/v1/state" },
+          503,
+          "Synthetic state refresh failure",
+        );
+        return;
+      }
+
+      await fulfillJson(route, 200, deepClone(controller.state));
+    });
+
+    await bootAuthenticatedTasks(page, controller);
+    await openTaskEditor(page, task.title);
+    await page.locator("#task-deadline-input").fill("2026-09-21");
+    await page.locator("#task-form-submit").click();
+    await expect(page.locator("#task-form-status")).toBeVisible();
+
+    expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
+    expect(controller.state.tasks[0].currentDeadline).toBe("2026-09-21");
+    expect(controller.state.tasks[0].version).toBe(5);
+    expect(controller.state.syncVersion).toBe(2);
+    expect(stateReadCount).toBe(2);
+    await expect.soft(page.locator("#task-form-status")).toHaveText(
+      "Изменение принято сервером, не удалось обновить данные",
+    );
+    const retryButton = page.getByRole("button", {
+      name: /повторить.*(?:загрузку|обновление)|обновить данные/i,
+    });
+
+    await expect.soft(retryButton).toBeVisible();
+
+    if ((await retryButton.count()) > 0) {
+      await retryButton.click();
+      await expect(
+        getTaskCard(page, "#active-tasks-list", task.title),
+      ).toContainText("21.09.2026");
+    }
+
+    expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
 module.exports = {
   LOCAL_ORIGIN,
   createApiMockController,
