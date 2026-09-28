@@ -211,6 +211,7 @@ let csrfToken = null;
 let currentUser = null;
 let authRequestPending = false;
 let mutationPending = false;
+let taskStateRefreshPending = false;
 let activeMainTab = "tasks";
 let uiPreferencesReady = false;
 let activeTasksExpanded = true;
@@ -1302,7 +1303,7 @@ function createCalendarDayOverviewTask(task, todayParts) {
     editButton.className =
       "task-card__action-button task-card__edit-button";
     editButton.type = "button";
-    editButton.disabled = mutationPending;
+    editButton.disabled = mutationPending || taskStateRefreshPending;
     editButton.textContent = "Редактировать";
     editButton.addEventListener("click", () => {
       setActiveMainTab("tasks");
@@ -1776,12 +1777,25 @@ async function loadServerState({ initialUiPreferences = null } = {}) {
 function setMutationPending(isPending) {
   mutationPending = isPending;
   elements.subjectForm.querySelector('button[type="submit"]').disabled = isPending;
-  elements.taskFormSubmit.disabled = isPending;
+  elements.taskFormSubmit.disabled = isPending || taskStateRefreshPending;
   elements.taskFormCancel.disabled = isPending;
 
-  for (const button of document.querySelectorAll(".task-card__action-button")) {
-    button.disabled = isPending;
+  for (const button of document.querySelectorAll(
+    ".task-card__action-button:not(.task-state-retry-button)",
+  )) {
+    button.disabled = isPending || taskStateRefreshPending;
   }
+
+  const retryButton = document.querySelector(".task-state-retry-button");
+
+  if (retryButton) {
+    retryButton.disabled = isPending;
+  }
+}
+
+function setTaskStateRefreshPending(isPending) {
+  taskStateRefreshPending = isPending;
+  setMutationPending(mutationPending);
 }
 
 function getProfileProgress(profile) {
@@ -1915,13 +1929,13 @@ function createTaskCard(task, todayParts) {
     completeButton.className =
       "task-card__action-button task-card__complete-button";
     completeButton.type = "button";
-    completeButton.disabled = mutationPending;
+    completeButton.disabled = mutationPending || taskStateRefreshPending;
     completeButton.textContent = "Выполнено";
     completeButton.addEventListener("click", () => completeTask(task.id));
     editButton.className =
       "task-card__action-button task-card__edit-button";
     editButton.type = "button";
-    editButton.disabled = mutationPending;
+    editButton.disabled = mutationPending || taskStateRefreshPending;
     editButton.textContent = "Редактировать";
     editButton.addEventListener("click", () => startEditingTask(task.id));
     actions.append(completeButton, editButton);
@@ -1931,7 +1945,7 @@ function createTaskCard(task, todayParts) {
 
   deleteButton.className = "task-card__action-button task-card__delete-button";
   deleteButton.type = "button";
-  deleteButton.disabled = mutationPending;
+  deleteButton.disabled = mutationPending || taskStateRefreshPending;
   deleteButton.textContent = "Удалить";
   deleteButton.addEventListener("click", () => deleteTask(task.id));
   actions.append(deleteButton);
@@ -2044,7 +2058,7 @@ function closeEditingForTask(taskId) {
 }
 
 async function completeTask(taskId) {
-  if (mutationPending) {
+  if (mutationPending || taskStateRefreshPending) {
     return false;
   }
 
@@ -2058,25 +2072,28 @@ async function completeTask(taskId) {
   hideTaskFormStatus();
 
   try {
-    await apiRequest(`/tasks/${encodeURIComponent(task.id)}/complete`, {
-      method: "POST",
-      body: { version: task.version },
-      withCsrf: true,
-    });
-    closeEditingForTask(taskId);
-    await loadServerState();
-    return true;
-  } catch (error) {
-    if (error.status === 409) {
-      await reloadAfterConflict();
-    } else if (error.status !== 401) {
-      showTaskFormStatus(
-        getApiErrorMessage(error, "Не удалось выполнить задачу"),
-        true,
-      );
+    try {
+      await apiRequest(`/tasks/${encodeURIComponent(task.id)}/complete`, {
+        method: "POST",
+        body: { version: task.version },
+        withCsrf: true,
+      });
+    } catch (error) {
+      if (error.status === 409) {
+        await reloadAfterConflict();
+      } else if (error.status !== 401) {
+        showTaskFormStatus(
+          getApiErrorMessage(error, "Не удалось выполнить задачу"),
+          true,
+        );
+      }
+
+      return false;
     }
 
-    return false;
+    closeEditingForTask(taskId);
+    await refreshStateAfterAcceptedMutation();
+    return true;
   } finally {
     setMutationPending(false);
   }
@@ -2091,7 +2108,7 @@ function getDeleteConfirmationMessage(task) {
 }
 
 async function deleteTask(taskId) {
-  if (mutationPending) {
+  if (mutationPending || taskStateRefreshPending) {
     return false;
   }
 
@@ -2105,25 +2122,28 @@ async function deleteTask(taskId) {
   hideTaskFormStatus();
 
   try {
-    await apiRequest(`/tasks/${encodeURIComponent(task.id)}`, {
-      method: "DELETE",
-      body: { version: task.version },
-      withCsrf: true,
-    });
-    closeEditingForTask(taskId);
-    await loadServerState();
-    return true;
-  } catch (error) {
-    if (error.status === 409) {
-      await reloadAfterConflict();
-    } else if (error.status !== 401) {
-      showTaskFormStatus(
-        getApiErrorMessage(error, "Не удалось удалить задачу"),
-        true,
-      );
+    try {
+      await apiRequest(`/tasks/${encodeURIComponent(task.id)}`, {
+        method: "DELETE",
+        body: { version: task.version },
+        withCsrf: true,
+      });
+    } catch (error) {
+      if (error.status === 409) {
+        await reloadAfterConflict();
+      } else if (error.status !== 401) {
+        showTaskFormStatus(
+          getApiErrorMessage(error, "Не удалось удалить задачу"),
+          true,
+        );
+      }
+
+      return false;
     }
 
-    return false;
+    closeEditingForTask(taskId);
+    await refreshStateAfterAcceptedMutation();
+    return true;
   } finally {
     setMutationPending(false);
   }
@@ -2268,6 +2288,7 @@ function clearTaskErrors() {
 }
 
 function hideTaskFormStatus() {
+  document.querySelector(".task-state-retry-button")?.remove();
   elements.taskFormStatus.textContent = "";
   elements.taskFormStatus.hidden = true;
   elements.taskFormStatus.classList.remove("form-status--error");
@@ -2275,10 +2296,55 @@ function hideTaskFormStatus() {
 }
 
 function showTaskFormStatus(message, isError = false) {
+  document.querySelector(".task-state-retry-button")?.remove();
   elements.taskFormStatus.textContent = message;
   elements.taskFormStatus.hidden = false;
   elements.taskFormStatus.classList.toggle("form-status--error", isError);
   elements.taskFormStatus.setAttribute("role", isError ? "alert" : "status");
+}
+
+function showAcceptedMutationRefreshFailure() {
+  showTaskFormStatus(
+    "Изменение принято сервером, не удалось обновить данные",
+    true,
+  );
+
+  const retryButton = document.createElement("button");
+
+  retryButton.className =
+    "task-card__action-button task-state-retry-button";
+  retryButton.type = "button";
+  retryButton.disabled = mutationPending;
+  retryButton.textContent = "Повторить загрузку";
+  retryButton.addEventListener("click", async () => {
+    retryButton.disabled = true;
+
+    if (await refreshStateAfterAcceptedMutation()) {
+      showTaskFormStatus("Данные обновлены");
+    }
+  });
+  elements.taskFormStatus.insertAdjacentElement("afterend", retryButton);
+}
+
+async function refreshStateAfterAcceptedMutation() {
+  if (!taskStateRefreshPending) {
+    setTaskStateRefreshPending(true);
+  }
+
+  try {
+    await loadServerState();
+    setTaskStateRefreshPending(false);
+    return true;
+  } catch (error) {
+    if (error.status === 401) {
+      setTaskStateRefreshPending(false);
+      hideTaskFormStatus();
+      return false;
+    }
+
+    showAcceptedMutationRefreshFailure();
+    return false;
+  }
 }
 
 function setTaskFormCreateMode({ resetForm = false } = {}) {
@@ -2512,23 +2578,30 @@ async function saveEditedTask(values) {
   setMutationPending(true);
 
   try {
-    await apiRequest(`/tasks/${encodeURIComponent(currentTask.id)}`, {
-      method: "PATCH",
-      body: payload,
-      withCsrf: true,
-    });
-    await loadServerState();
+    try {
+      await apiRequest(`/tasks/${encodeURIComponent(currentTask.id)}`, {
+        method: "PATCH",
+        body: payload,
+        withCsrf: true,
+      });
+    } catch (error) {
+      if (error.status === 409) {
+        await reloadAfterConflict();
+      } else if (error.status !== 401) {
+        showTaskFormStatus(
+          getApiErrorMessage(error, "Не удалось сохранить изменения"),
+          true,
+        );
+      }
+
+      return;
+    }
+
     setTaskFormCreateMode({ resetForm: true });
     setTaskFormPanelOpen(false);
-    showTaskFormStatus("Изменения сохранены");
-  } catch (error) {
-    if (error.status === 409) {
-      await reloadAfterConflict();
-    } else if (error.status !== 401) {
-      showTaskFormStatus(
-        getApiErrorMessage(error, "Не удалось сохранить изменения"),
-        true,
-      );
+
+    if (await refreshStateAfterAcceptedMutation()) {
+      showTaskFormStatus("Изменения сохранены");
     }
   } finally {
     setMutationPending(false);
@@ -2538,7 +2611,7 @@ async function saveEditedTask(values) {
 async function handleTaskSubmit(event) {
   event.preventDefault();
 
-  if (mutationPending) {
+  if (mutationPending || taskStateRefreshPending) {
     return;
   }
 
@@ -2565,25 +2638,32 @@ async function handleTaskSubmit(event) {
   setMutationPending(true);
 
   try {
-    await apiRequest("/tasks", {
-      method: "POST",
-      body: payload,
-      withCsrf: true,
-    });
-    await loadServerState();
+    try {
+      await apiRequest("/tasks", {
+        method: "POST",
+        body: payload,
+        withCsrf: true,
+      });
+    } catch (error) {
+      if (error.status !== 401) {
+        showTaskFormStatus(
+          getApiErrorMessage(error, "Не удалось сохранить задачу"),
+          true,
+        );
+      }
+
+      return;
+    }
+
     elements.taskForm.reset();
     updateSubjectField();
     updateDifficultyPreview();
     setActiveTasksExpanded(true);
-    renderTaskLists();
     setTaskFormPanelOpen(false);
-    showTaskFormStatus("Задача сохранена");
-  } catch (error) {
-    if (error.status !== 401) {
-      showTaskFormStatus(
-        getApiErrorMessage(error, "Не удалось сохранить задачу"),
-        true,
-      );
+
+    if (await refreshStateAfterAcceptedMutation()) {
+      renderTaskLists();
+      showTaskFormStatus("Задача сохранена");
     }
   } finally {
     setMutationPending(false);
