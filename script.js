@@ -2,6 +2,7 @@
 
 const XP_PER_LEVEL = 100;
 const API_BASE_PATH = "/api/v1";
+const API_REQUEST_TIMEOUT_MS = 15_000;
 const APP_TIME_ZONE = "Asia/Irkutsk";
 const MIN_CALENDAR_YEAR = 1;
 const MAX_CALENDAR_YEAR = 9999;
@@ -1595,6 +1596,13 @@ class ApiError extends Error {
   }
 }
 
+class ApiTimeoutError extends ApiError {
+  constructor() {
+    super(0, null, "Время ожидания ответа сервера истекло");
+    this.name = "ApiTimeoutError";
+  }
+}
+
 class ServerContractError extends Error {
   constructor(message = "Сервер вернул некорректное состояние") {
     super(message);
@@ -1664,7 +1672,14 @@ async function apiRequest(
     headers["X-CSRF-Token"] = csrfToken;
   }
 
+  const controller = new AbortController();
+  let didTimeout = false;
+  const timeoutId = window.setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, API_REQUEST_TIMEOUT_MS);
   let response;
+  let data = null;
 
   try {
     response = await fetch(`${API_BASE_PATH}${path}`, {
@@ -1672,19 +1687,32 @@ async function apiRequest(
       headers,
       credentials: "same-origin",
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
     });
+
+    if (response.status !== 204) {
+      const contentType = response.headers.get("content-type") ?? "";
+
+      try {
+        data = contentType.includes("application/json")
+          ? await response.json()
+          : await response.text();
+      } catch (error) {
+        if (didTimeout) {
+          throw error;
+        }
+
+        data = contentType.includes("application/json") ? null : "";
+      }
+    }
   } catch (error) {
+    if (didTimeout) {
+      throw new ApiTimeoutError();
+    }
+
     throw new ApiError(0, null, error.message);
-  }
-
-  let data = null;
-
-  if (response.status !== 204) {
-    const contentType = response.headers.get("content-type") ?? "";
-
-    data = contentType.includes("application/json")
-      ? await response.json().catch(() => null)
-      : await response.text().catch(() => "");
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 
   if (!response.ok) {
@@ -2079,7 +2107,9 @@ async function completeTask(taskId) {
         withCsrf: true,
       });
     } catch (error) {
-      if (error.status === 409) {
+      if (error instanceof ApiTimeoutError) {
+        handleTimedOutTaskMutation();
+      } else if (error.status === 409) {
         await reloadAfterConflict();
       } else if (error.status !== 401) {
         showTaskFormStatus(
@@ -2129,7 +2159,9 @@ async function deleteTask(taskId) {
         withCsrf: true,
       });
     } catch (error) {
-      if (error.status === 409) {
+      if (error instanceof ApiTimeoutError) {
+        handleTimedOutTaskMutation();
+      } else if (error.status === 409) {
         await reloadAfterConflict();
       } else if (error.status !== 401) {
         showTaskFormStatus(
@@ -2324,6 +2356,53 @@ function showAcceptedMutationRefreshFailure() {
     }
   });
   elements.taskFormStatus.insertAdjacentElement("afterend", retryButton);
+}
+
+function showUncertainMutationResult() {
+  showTaskFormStatus(
+    "Не удалось подтвердить результат операции. Проверьте актуальные данные перед повтором.",
+    true,
+  );
+
+  const verifyButton = document.createElement("button");
+
+  verifyButton.className =
+    "task-card__action-button task-state-retry-button";
+  verifyButton.type = "button";
+  verifyButton.disabled = mutationPending;
+  verifyButton.textContent = "Проверить данные";
+  verifyButton.addEventListener("click", async () => {
+    verifyButton.disabled = true;
+
+    if (await verifyStateAfterTimedOutMutation()) {
+      showTaskFormStatus(
+        "Данные обновлены. Проверьте результат операции перед повтором.",
+      );
+    }
+  });
+  elements.taskFormStatus.insertAdjacentElement("afterend", verifyButton);
+}
+
+function handleTimedOutTaskMutation() {
+  setTaskStateRefreshPending(true);
+  showUncertainMutationResult();
+}
+
+async function verifyStateAfterTimedOutMutation() {
+  try {
+    await loadServerState();
+    setTaskStateRefreshPending(false);
+    return true;
+  } catch (error) {
+    if (error.status === 401) {
+      setTaskStateRefreshPending(false);
+      hideTaskFormStatus();
+      return false;
+    }
+
+    showUncertainMutationResult();
+    return false;
+  }
 }
 
 async function refreshStateAfterAcceptedMutation() {
@@ -2585,7 +2664,9 @@ async function saveEditedTask(values) {
         withCsrf: true,
       });
     } catch (error) {
-      if (error.status === 409) {
+      if (error instanceof ApiTimeoutError) {
+        handleTimedOutTaskMutation();
+      } else if (error.status === 409) {
         await reloadAfterConflict();
       } else if (error.status !== 401) {
         showTaskFormStatus(
@@ -2645,7 +2726,9 @@ async function handleTaskSubmit(event) {
         withCsrf: true,
       });
     } catch (error) {
-      if (error.status !== 401) {
+      if (error instanceof ApiTimeoutError) {
+        handleTimedOutTaskMutation();
+      } else if (error.status !== 401) {
         showTaskFormStatus(
           getApiErrorMessage(error, "Не удалось сохранить задачу"),
           true,
