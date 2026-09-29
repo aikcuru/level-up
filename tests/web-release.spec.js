@@ -2685,6 +2685,814 @@ test.describe("E13 accepted mutation with failed state refresh", () => {
   });
 });
 
+const UI_PREFERENCES_KEY = "level-up:ui-preferences";
+const UI_FILTER_WITHOUT_SUBJECT = "__without_subject__";
+const E14_E21_SELECTED_DATE = "2026-09-21";
+
+async function getStoredUiPreferences(page) {
+  return page.evaluate((key) => {
+    const rawValue = window.sessionStorage.getItem(key);
+
+    return rawValue === null ? null : JSON.parse(rawValue);
+  }, UI_PREFERENCES_KEY);
+}
+
+async function getBrowserStorageSnapshot(page) {
+  return page.evaluate(() => ({
+    sessionStorage: Object.fromEntries(
+      Array.from({ length: window.sessionStorage.length }, (_, index) => {
+        const key = window.sessionStorage.key(index);
+
+        return [key, window.sessionStorage.getItem(key)];
+      }),
+    ),
+    localStorage: Object.fromEntries(
+      Array.from({ length: window.localStorage.length }, (_, index) => {
+        const key = window.localStorage.key(index);
+
+        return [key, window.localStorage.getItem(key)];
+      }),
+    ),
+  }));
+}
+
+async function setUiPreferencesThroughControls(
+  page,
+  {
+    activeMainTab = "calendar",
+    status = "active",
+    direction = "Школа",
+    subject = "all",
+    mode = "day",
+    selectedDate = E14_E21_SELECTED_DATE,
+  } = {},
+) {
+  await page.locator("#main-tab-tasks").click();
+
+  if (await page.locator("#filters-panel").isHidden()) {
+    await page.locator("#filters-toggle").click();
+  }
+
+  await page.locator("#status-filter").selectOption(status);
+  await page.locator("#direction-filter").selectOption(direction);
+  await page.locator("#subject-filter").selectOption(subject);
+  await page.locator("#main-tab-calendar").click();
+
+  if (
+    (await page.locator('.calendar [data-calendar-mode="month"]').getAttribute(
+      "aria-pressed",
+    )) !== "true"
+  ) {
+    await page.locator('.calendar [data-calendar-mode="month"]').click();
+  }
+
+  await page
+    .locator(`.calendar-day[data-date="${selectedDate}"]`)
+    .click();
+  await page.locator(`.calendar [data-calendar-mode="${mode}"]`).click();
+
+  if (activeMainTab !== "calendar") {
+    await page.locator(`#main-tab-${activeMainTab}`).click();
+  }
+}
+
+async function expectUiPreferencesInDom(page, expected) {
+  await expect(page.locator(`#main-tab-${expected.activeMainTab}`)).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator(`#main-panel-${expected.activeMainTab}`)).toBeVisible();
+  await expect(page.locator("#status-filter")).toHaveValue(
+    expected.filters.status,
+  );
+  await expect(page.locator("#direction-filter")).toHaveValue(
+    expected.filters.direction,
+  );
+  await expect(page.locator("#subject-filter")).toHaveValue(
+    expected.filters.subject,
+  );
+  await expect(page.locator(".calendar")).toHaveAttribute(
+    "data-calendar-mode",
+    expected.calendar.mode,
+  );
+  await expect(
+    page.locator(
+      `.calendar [data-calendar-mode="${expected.calendar.mode}"]`,
+    ),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  if (expected.calendar.mode === "day") {
+    const parts = expected.calendar.selectedDate.split("-").map(Number);
+    const expectedDate = new Intl.DateTimeFormat("ru-RU", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    })
+      .format(new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])))
+      .replace(/\s*г\.$/, "");
+
+    await expect(page.locator("#calendar-month")).toHaveText(expectedDate);
+  } else {
+    await expect(
+      page
+        .locator(
+          `.calendar [data-date="${expected.calendar.selectedDate}"][aria-selected="true"]`,
+        )
+        .first(),
+    ).toBeAttached();
+  }
+}
+
+async function bootAuthenticatedWithRawPreferences(
+  page,
+  rawPreferences,
+  controller = createApiMockController(),
+) {
+  await installMatrixClock(page);
+  await page.addInitScript(
+    ({ key, rawValue }) => {
+      window.sessionStorage.setItem(key, rawValue);
+    },
+    { key: UI_PREFERENCES_KEY, rawValue: rawPreferences },
+  );
+  await installApiMock(page, controller);
+  await page.goto("/index.html");
+  await expect(page.locator("#main-interface")).toBeVisible();
+  return controller;
+}
+
+async function expectDefaultUiPreferences(page) {
+  const expected = createUiPreferences({
+    activeMainTab: "tasks",
+    selectedDate: MATRIX_TODAY_KEY,
+  });
+
+  await expectUiPreferencesInDom(page, expected);
+  expect(await getStoredUiPreferences(page)).toEqual(expected);
+}
+
+test.describe("E14 UI preferences survive refresh", () => {
+  test("E14 restores non-default UI after F5 using fresh auth, CSRF and state", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    const subjectValue = `subject:${controller.state.subjects[0].id}`;
+    const expected = createUiPreferences({
+      activeMainTab: "calendar",
+      status: "active",
+      direction: "Школа",
+      subject: subjectValue,
+      mode: "day",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+    const issuedCsrfTokens = [];
+
+    controller.setRouteOverride(
+      "POST",
+      "/api/v1/auth/csrf",
+      async ({ route }) => {
+        const token = `test-e14-csrf-${issuedCsrfTokens.length + 1}`;
+
+        issuedCsrfTokens.push(token);
+        controller.csrfToken = token;
+        await fulfillJson(route, 200, { csrfToken: token });
+      },
+    );
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, {
+      subject: subjectValue,
+    });
+    expect(await getStoredUiPreferences(page)).toEqual(expected);
+
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectUiPreferencesInDom(page, expected);
+    expect(await getStoredUiPreferences(page)).toEqual(expected);
+    expect(getRouteRequests(controller, "GET", "/api/v1/auth/me")).toHaveLength(
+      2,
+    );
+    expect(
+      getRouteRequests(controller, "POST", "/api/v1/auth/csrf"),
+    ).toHaveLength(2);
+    expect(getRouteRequests(controller, "GET", "/api/v1/state")).toHaveLength(
+      2,
+    );
+    expect(issuedCsrfTokens).toEqual([
+      "test-e14-csrf-1",
+      "test-e14-csrf-2",
+    ]);
+    const storageText = JSON.stringify(await getBrowserStorageSnapshot(page));
+
+    expect(storageText).not.toContain("test-e14-csrf-1");
+    expect(storageText).not.toContain("test-e14-csrf-2");
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E15 fresh server state after refresh", () => {
+  test("E15 keeps UI preferences but renders only the new server state", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    const selectedSubject = controller.state.subjects[0];
+    const subjectValue = `subject:${selectedSubject.id}`;
+    const expected = createUiPreferences({
+      activeMainTab: "calendar",
+      status: "active",
+      direction: "Школа",
+      subject: subjectValue,
+      mode: "day",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+    const oldTaskTitle = controller.state.tasks[0].title;
+    const newTaskTitle = "E15 fresh server task";
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, { subject: subjectValue });
+
+    controller.state.profile.displayName = "E15 fresh profile";
+    controller.state.profile.totalXp = 85;
+    controller.state.profile.level = 1;
+    selectedSubject.name = "E15 fresh subject";
+    selectedSubject.normalizedName = "e15 fresh subject";
+    controller.state.tasks = [
+      createSyntheticTask({
+        id: "test-e15-fresh-task-001",
+        title: newTaskTitle,
+        subjectId: selectedSubject.id,
+        currentDeadline: E14_E21_SELECTED_DATE,
+        createdAt: "2026-09-12T08:00:00.000Z",
+      }),
+    ];
+    controller.state.syncVersion += 1;
+
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectUiPreferencesInDom(page, expected);
+    await expect(page.locator("#profile-name")).toHaveText("E15 fresh profile");
+    await expect(page.locator("#profile-total-xp")).toHaveText("85");
+    await expect(page.locator("#subject-filter")).toContainText(
+      "E15 fresh subject",
+    );
+    await expect(
+      page.locator("#calendar-selected-tasks .calendar-day-task__title"),
+    ).toHaveText(newTaskTitle);
+    await expect(page.getByText(oldTaskTitle, { exact: true })).toHaveCount(0);
+    expect(getRouteRequests(controller, "GET", "/api/v1/state")).toHaveLength(
+      2,
+    );
+    const storageText = JSON.stringify(await getBrowserStorageSnapshot(page));
+
+    expect(storageText).not.toContain(oldTaskTitle);
+    expect(storageText).not.toContain(newTaskTitle);
+    expect(storageText).not.toContain("E15 fresh profile");
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E16 stale subject preference normalization", () => {
+  test("E16 resets only a missing subject filter after fresh state", async ({
+    page,
+  }) => {
+    const state = createMockState();
+    const removableSubject = {
+      id: "test-e16-removable-subject-001",
+      name: "E16 removable subject",
+      normalizedName: "e16 removable subject",
+      isSystem: false,
+      version: 1,
+      createdAt: "2026-09-12T09:00:00.000Z",
+      updatedAt: "2026-09-12T09:00:00.000Z",
+    };
+
+    state.subjects.push(removableSubject);
+    const controller = createApiMockController({ state });
+    const subjectValue = `subject:${removableSubject.id}`;
+    const expected = createUiPreferences({
+      activeMainTab: "calendar",
+      status: "active",
+      direction: "Школа",
+      subject: "all",
+      mode: "day",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, { subject: subjectValue });
+    controller.state.subjects = controller.state.subjects.filter(
+      ({ id }) => id !== removableSubject.id,
+    );
+    controller.state.syncVersion += 1;
+
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectUiPreferencesInDom(page, expected);
+    expect(await getStoredUiPreferences(page)).toEqual(expected);
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E17 invalid UI preferences", () => {
+  test("E17 uses safe defaults for malformed JSON", async ({ page }) => {
+    const controller = await bootAuthenticatedWithRawPreferences(
+      page,
+      "{malformed-json",
+    );
+
+    await expectDefaultUiPreferences(page);
+    await expect(page.locator("#profile-name")).toHaveText(
+      controller.state.profile.displayName,
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E17 uses safe defaults for a non-object root", async ({ page }) => {
+    const controller = await bootAuthenticatedWithRawPreferences(page, "[]");
+
+    await expectDefaultUiPreferences(page);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E17 uses safe defaults for an unknown version", async ({ page }) => {
+    const controller = await bootAuthenticatedWithRawPreferences(
+      page,
+      JSON.stringify({ version: 999, activeMainTab: "calendar" }),
+    );
+
+    await expectDefaultUiPreferences(page);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E17 normalizes invalid fields without discarding valid fields", async ({
+    page,
+  }) => {
+    const rawValue = {
+      version: 1,
+      activeMainTab: "archive",
+      filters: {
+        status: "invalid-status",
+        direction: "invalid-direction",
+        subject: UI_FILTER_WITHOUT_SUBJECT,
+      },
+      calendar: {
+        mode: "invalid-mode",
+        selectedDate: E14_E21_SELECTED_DATE,
+      },
+    };
+    const controller = await bootAuthenticatedWithRawPreferences(
+      page,
+      JSON.stringify(rawValue),
+    );
+    const expected = createUiPreferences({
+      activeMainTab: "archive",
+      status: "all",
+      direction: "all",
+      subject: UI_FILTER_WITHOUT_SUBJECT,
+      mode: "month",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+
+    await expectUiPreferencesInDom(page, expected);
+    expect(await getStoredUiPreferences(page)).toEqual(expected);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E17 strips extra fields instead of merging arbitrary state", async ({
+    page,
+  }) => {
+    const expected = createUiPreferences({
+      activeMainTab: "calendar",
+      status: "active",
+      direction: "Школа",
+      subject: "all",
+      mode: "day",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+    const rawValue = {
+      ...expected,
+      unexpected: "E17_SYNTHETIC_EXTRA",
+      appState: {
+        tasks: [{ title: "E17_SYNTHETIC_FAKE_TASK" }],
+      },
+      fakeToken: "E17_SYNTHETIC_FAKE_TOKEN",
+      filters: {
+        ...expected.filters,
+        unexpected: "E17_SYNTHETIC_FILTER_EXTRA",
+      },
+      calendar: {
+        ...expected.calendar,
+        unexpected: "E17_SYNTHETIC_CALENDAR_EXTRA",
+      },
+    };
+    const controller = await bootAuthenticatedWithRawPreferences(
+      page,
+      JSON.stringify(rawValue),
+    );
+
+    await expectUiPreferencesInDom(page, expected);
+    expect(await getStoredUiPreferences(page)).toEqual(expected);
+    const storageText = JSON.stringify(await getBrowserStorageSnapshot(page));
+
+    expect(storageText).not.toContain("E17_SYNTHETIC_EXTRA");
+    expect(storageText).not.toContain("E17_SYNTHETIC_FAKE_TASK");
+    expect(storageText).not.toContain("E17_SYNTHETIC_FAKE_TOKEN");
+    await expect(page.getByText("E17_SYNTHETIC_FAKE_TASK")).toHaveCount(0);
+    await expect(page.locator("#profile-name")).toHaveText(
+      controller.state.profile.displayName,
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+async function makeSessionStorageThrow(page, { writesOnly = false } = {}) {
+  await page.addInitScript(({ onlyWrites }) => {
+    const sessionStorageObject = window.sessionStorage;
+    const methods = onlyWrites
+      ? ["setItem"]
+      : ["getItem", "setItem", "removeItem"];
+
+    for (const methodName of methods) {
+      const original = Storage.prototype[methodName];
+
+      Storage.prototype[methodName] = function (...args) {
+        if (this === sessionStorageObject) {
+          if (methodName === "setItem" && onlyWrites) {
+            throw new DOMException(
+              "Synthetic sessionStorage quota failure",
+              "QuotaExceededError",
+            );
+          }
+
+          throw new DOMException(
+            "Synthetic sessionStorage access denied",
+            "SecurityError",
+          );
+        }
+
+        return original.apply(this, args);
+      };
+    }
+  }, { onlyWrites: writesOnly });
+}
+
+test.describe("E18 unavailable browser storage", () => {
+  test("E18 keeps the UI working when sessionStorage access throws", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    const subjectValue = `subject:${controller.state.subjects[0].id}`;
+
+    await installMatrixClock(page);
+    await makeSessionStorageThrow(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, { subject: subjectValue });
+    await expectUiPreferencesInDom(
+      page,
+      createUiPreferences({
+        activeMainTab: "calendar",
+        status: "active",
+        direction: "Школа",
+        subject: subjectValue,
+        mode: "day",
+        selectedDate: E14_E21_SELECTED_DATE,
+      }),
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E18 visibly warns when UI preferences cannot be written", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+
+    await installMatrixClock(page);
+    await makeSessionStorageThrow(page, { writesOnly: true });
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, { subject: "all" });
+    await expect(page.locator("#main-panel-calendar")).toBeVisible();
+    await expect(page.locator("body")).toContainText(
+      /настройк[^\n]{0,160}(?:не\s+(?:сохран|восстанов)|после\s+обновлен)/i,
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E19 logout, reauthentication and account isolation", () => {
+  test("E19 logout clears only Level Up preferences and resets UI memory", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    const subjectValue = `subject:${controller.state.subjects[0].id}`;
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, { subject: subjectValue });
+    await page.evaluate(() => {
+      window.sessionStorage.setItem(
+        "test-e19-unrelated-key",
+        "test-e19-unrelated-value",
+      );
+    });
+    await page.locator("#logout-button").click();
+
+    await expect(page.locator("#login-panel")).toBeVisible();
+    await expect(page.locator("#main-interface")).toBeHidden();
+    await expect(
+      page.getByText(controller.state.tasks[0].title, { exact: true }),
+    ).not.toBeVisible();
+    const snapshot = await getBrowserStorageSnapshot(page);
+
+    expect(snapshot.sessionStorage[UI_PREFERENCES_KEY]).toBeUndefined();
+    expect(snapshot.sessionStorage["test-e19-unrelated-key"]).toBe(
+      "test-e19-unrelated-value",
+    );
+    await page.locator("#login-input").fill(controller.credentials.login);
+    await page.locator("#password-input").fill(controller.credentials.password);
+    await page.locator("#login-submit").click();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    const defaults = createUiPreferences({
+      activeMainTab: "tasks",
+      selectedDate: MATRIX_TODAY_KEY,
+    });
+
+    await expectUiPreferencesInDom(page, defaults);
+    expect(await getStoredUiPreferences(page)).toBeNull();
+    expect(
+      (await getBrowserStorageSnapshot(page)).sessionStorage[
+        "test-e19-unrelated-key"
+      ],
+    ).toBe("test-e19-unrelated-value");
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E19 starts a manual login from defaults after a state 401", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    let stateReadCount = 0;
+
+    controller.setRouteOverride("GET", "/api/v1/state", async ({ route }) => {
+      stateReadCount += 1;
+
+      if (stateReadCount === 1) {
+        await fulfillApiError(
+          route,
+          controller,
+          { method: "GET", pathname: "/api/v1/state" },
+          401,
+          "Synthetic E19 session expired",
+        );
+        return;
+      }
+
+      await fulfillJson(route, 200, deepClone(controller.state));
+    });
+    await installMatrixClock(page);
+    await seedUiPreferences(
+      page,
+      createUiPreferences({
+        activeMainTab: "calendar",
+        status: "overdue",
+        direction: "Личные дела",
+        subject: UI_FILTER_WITHOUT_SUBJECT,
+        mode: "day",
+        selectedDate: E14_E21_SELECTED_DATE,
+      }),
+    );
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#login-panel")).toBeVisible();
+    expect(await getStoredUiPreferences(page)).toBeNull();
+
+    await page.locator("#login-input").fill(controller.credentials.login);
+    await page.locator("#password-input").fill(controller.credentials.password);
+    await page.locator("#login-submit").click();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    const defaults = createUiPreferences({
+      activeMainTab: "tasks",
+      selectedDate: MATRIX_TODAY_KEY,
+    });
+
+    await expectUiPreferencesInDom(page, defaults);
+    expect(await getStoredUiPreferences(page)).toBeNull();
+    await expect(page.locator("#profile-name")).toHaveText(
+      controller.state.profile.displayName,
+    );
+    expect(stateReadCount).toBe(2);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E19 does not transfer UI or business data to a new synthetic account", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    const accountATaskTitle = controller.state.tasks[0].title;
+    const subjectValue = `subject:${controller.state.subjects[0].id}`;
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, { subject: subjectValue });
+    await page.locator("#logout-button").click();
+    await expect(page.locator("#login-panel")).toBeVisible();
+
+    const accountBState = createMockState();
+
+    accountBState.profile.userId = "test-user-b-001";
+    accountBState.profile.displayName = "E19 synthetic user B";
+    accountBState.tasks[0].id = "test-e19-user-b-task-001";
+    accountBState.tasks[0].title = "E19 synthetic account B task";
+    controller.state = deepClone(accountBState);
+    controller.auth.currentUser = createSyntheticUser(accountBState.profile);
+    controller.auth.currentUser.login = "test-user-b";
+    controller.credentials = {
+      login: "test-user-b",
+      password: "test-password-b",
+    };
+
+    await page.locator("#login-input").fill(controller.credentials.login);
+    await page.locator("#password-input").fill(controller.credentials.password);
+    await page.locator("#login-submit").click();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(page.locator("#profile-name")).toHaveText(
+      accountBState.profile.displayName,
+    );
+    await expect(
+      page.locator("#active-tasks-list .task-card__title"),
+    ).toHaveText(accountBState.tasks[0].title);
+    await expect(page.getByText(accountATaskTitle, { exact: true })).toHaveCount(
+      0,
+    );
+    const defaults = createUiPreferences({
+      activeMainTab: "tasks",
+      selectedDate: MATRIX_TODAY_KEY,
+    });
+
+    await expectUiPreferencesInDom(page, defaults);
+    expect(await getStoredUiPreferences(page)).toBeNull();
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E20 browser storage allowlist", () => {
+  test("E20 stores only allowed UI preferences and never stores a task draft", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    const subjectValue = `subject:${controller.state.subjects[0].id}`;
+    const draftMarker = "E20_SYNTHETIC_DRAFT_MUST_NOT_BE_STORED";
+    const expected = createUiPreferences({
+      activeMainTab: "calendar",
+      status: "active",
+      direction: "Школа",
+      subject: subjectValue,
+      mode: "day",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, { subject: subjectValue });
+    await page.locator("#main-tab-tasks").click();
+    await page.locator("#task-form-toggle").click();
+    await page.locator("#task-title-input").fill(draftMarker);
+    await page.locator("#main-tab-calendar").click();
+
+    const snapshot = await getBrowserStorageSnapshot(page);
+
+    expect(Object.keys(snapshot.localStorage)).toEqual([]);
+    expect(Object.keys(snapshot.sessionStorage)).toEqual([UI_PREFERENCES_KEY]);
+    expect(JSON.parse(snapshot.sessionStorage[UI_PREFERENCES_KEY])).toEqual(
+      expected,
+    );
+    const storageText = JSON.stringify(snapshot);
+
+    expect(storageText).not.toContain(draftMarker);
+    expect(storageText).not.toContain(TEST_CSRF_TOKEN);
+    expect(storageText).not.toContain(controller.state.profile.displayName);
+    expect(storageText).not.toContain(controller.state.tasks[0].title);
+    expect(storageText).not.toContain('"syncVersion"');
+    expect(storageText).not.toContain('"totalXp"');
+    expect(storageText).not.toContain('"level"');
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
+test.describe("E21 independent tabs and stale CSRF", () => {
+  test("E21 isolates tab UI and rejects one stale-CSRF mutation without retry", async ({
+    page,
+    context,
+  }) => {
+    const controller = createApiMockController();
+    const pageB = await context.newPage();
+    const csrfTokens = ["test-e21-csrf-a", "test-e21-csrf-b"];
+    let csrfRequestCount = 0;
+
+    controller.setRouteOverride(
+      "POST",
+      "/api/v1/auth/csrf",
+      async ({ route }) => {
+        const token = csrfTokens[csrfRequestCount];
+
+        csrfRequestCount += 1;
+        controller.csrfToken = token;
+        await fulfillJson(route, 200, { csrfToken: token });
+      },
+    );
+
+    try {
+      await installMatrixClock(page);
+      await installMatrixClock(pageB);
+      await installApiMock(page, controller);
+      await installApiMock(pageB, controller);
+      await page.goto("/index.html");
+      await expect(page.locator("#main-interface")).toBeVisible();
+      await pageB.goto("/index.html");
+      await expect(pageB.locator("#main-interface")).toBeVisible();
+      expect(csrfRequestCount).toBe(2);
+      expect(controller.csrfToken).toBe("test-e21-csrf-b");
+
+      const subjectValue = `subject:${controller.state.tasks[0].subjectId}`;
+      const pageAExpected = createUiPreferences({
+        activeMainTab: "calendar",
+        status: "active",
+        direction: "Школа",
+        subject: subjectValue,
+        mode: "day",
+        selectedDate: E14_E21_SELECTED_DATE,
+      });
+      const pageBExpected = createUiPreferences({
+        activeMainTab: "archive",
+        status: "overdue",
+        direction: "Личные дела",
+        subject: UI_FILTER_WITHOUT_SUBJECT,
+        mode: "week",
+        selectedDate: E14_E21_SELECTED_DATE,
+      });
+
+      await setUiPreferencesThroughControls(page, { subject: subjectValue });
+      await setUiPreferencesThroughControls(pageB, {
+        activeMainTab: "archive",
+        status: "overdue",
+        direction: "Личные дела",
+        subject: UI_FILTER_WITHOUT_SUBJECT,
+        mode: "week",
+      });
+      await expectUiPreferencesInDom(page, pageAExpected);
+      await expectUiPreferencesInDom(pageB, pageBExpected);
+      expect(await getStoredUiPreferences(page)).toEqual(pageAExpected);
+      expect(await getStoredUiPreferences(pageB)).toEqual(pageBExpected);
+
+      const pageBStorageBeforeMutation = await getStoredUiPreferences(pageB);
+      const task = controller.state.tasks[0];
+      const pathname = `/api/v1/tasks/${task.id}/complete`;
+
+      await page.locator("#main-tab-tasks").click();
+      await getTaskCard(page, "#active-tasks-list", task.title)
+        .locator(".task-card__complete-button")
+        .click();
+      await expect(page.locator("#task-form-status")).toContainText(
+        "Сервер отклонил запрос",
+      );
+
+      expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+      expect(controller.state.tasks[0].status).toBe("active");
+      expect(controller.state.tasks[0].xpAwarded).toBe(false);
+      expect(controller.state.profile.totalXp).toBe(0);
+      await expect(
+        getTaskCard(page, "#active-tasks-list", task.title),
+      ).toBeVisible();
+      expect(await getStoredUiPreferences(pageB)).toEqual(
+        pageBStorageBeforeMutation,
+      );
+      await expectUiPreferencesInDom(pageB, pageBExpected);
+      expectNoUnexpectedRequests(controller);
+    } finally {
+      await pageB.close();
+    }
+  });
+});
+
 module.exports = {
   LOCAL_ORIGIN,
   createApiMockController,
