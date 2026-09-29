@@ -3493,6 +3493,523 @@ test.describe("E21 independent tabs and stale CSRF", () => {
   });
 });
 
+const E22_BEFORE_MIDNIGHT = "2026-09-18T15:59:59.000Z";
+const E22_AFTER_MIDNIGHT = "2026-09-18T16:00:00.000Z";
+const E22_SELECTED_DATE = "2026-09-18";
+const E22_NEXT_DATE = "2026-09-19";
+
+async function getE22CalendarSnapshot(page, taskAId, taskBId) {
+  return page.evaluate(
+    ({ firstTaskId, secondTaskId, preferencesKey }) => {
+      const taskA = document.querySelector(
+        `.calendar-task[data-task-id="${firstTaskId}"]`,
+      );
+      const taskB = document.querySelector(
+        `.calendar-task[data-task-id="${secondTaskId}"]`,
+      );
+      const storedValue = window.sessionStorage.getItem(preferencesKey);
+      const preferences = storedValue === null ? null : JSON.parse(storedValue);
+
+      return {
+        todayDate:
+          document.querySelector(".calendar-day--today")?.dataset.date ?? null,
+        selectedDate:
+          document.querySelector('.calendar-day[aria-selected="true"]')?.dataset
+            .date ?? null,
+        calendarMode:
+          document.querySelector(".calendar")?.dataset.calendarMode ?? null,
+        taskAOverdue: taskA?.classList.contains("calendar-task--overdue") ?? null,
+        taskBIsInTodayCell:
+          taskB?.closest(".calendar-day")?.classList.contains(
+            "calendar-day--today",
+          ) ?? null,
+        storedSelectedDate: preferences?.calendar?.selectedDate ?? null,
+      };
+    },
+    {
+      firstTaskId: taskAId,
+      secondTaskId: taskBId,
+      preferencesKey: UI_PREFERENCES_KEY,
+    },
+  );
+}
+
+test.describe("E22 Asia/Irkutsk calendar day rollover", () => {
+  test("E22 refreshes today and overdue state after returning from background", async ({
+    browser,
+  }, testInfo) => {
+    const taskA = createSyntheticTask({
+      id: "test-e22-task-a-001",
+      title: "E22 task A September 18",
+      currentDeadline: E22_SELECTED_DATE,
+      createdAt: "2026-09-10T08:00:00.000Z",
+    });
+    const taskB = createSyntheticTask({
+      id: "test-e22-task-b-001",
+      title: "E22 task B September 19",
+      currentDeadline: E22_NEXT_DATE,
+      createdAt: "2026-09-10T09:00:00.000Z",
+    });
+    const state = createMockState();
+
+    state.tasks = [taskA, taskB];
+    state.profile.totalXp = 0;
+    state.profile.level = 1;
+    state.syncVersion = 1;
+
+    const controller = createApiMockController({ state });
+    const context = await browser.newContext({
+      baseURL: LOCAL_ORIGIN,
+      timezoneId: "America/Los_Angeles",
+    });
+    const page = await context.newPage();
+
+    try {
+      await page.clock.install({ time: new Date(E22_BEFORE_MIDNIGHT) });
+      await seedUiPreferences(
+        page,
+        createUiPreferences({
+          activeMainTab: "calendar",
+          mode: "month",
+          selectedDate: E22_SELECTED_DATE,
+        }),
+      );
+      await installApiMock(page, controller);
+      await page.goto("/index.html");
+      await expect(page.locator("#main-interface")).toBeVisible();
+      await expect(page.locator("#main-panel-calendar")).toBeVisible();
+
+      const before = await getE22CalendarSnapshot(page, taskA.id, taskB.id);
+      const requestsBefore = controller.requests.length;
+
+      expect(before).toEqual({
+        todayDate: E22_SELECTED_DATE,
+        selectedDate: E22_SELECTED_DATE,
+        calendarMode: "month",
+        taskAOverdue: false,
+        taskBIsInTodayCell: false,
+        storedSelectedDate: E22_SELECTED_DATE,
+      });
+
+      await page.clock.fastForward(1_000);
+      await page.evaluate(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+
+      const after = await getE22CalendarSnapshot(page, taskA.id, taskB.id);
+      const requestsAfter = controller.requests.length;
+
+      await page.locator('.calendar [data-calendar-mode="week"]').click();
+      await page.locator('.calendar [data-calendar-mode="month"]').click();
+
+      const afterManualRender = await getE22CalendarSnapshot(
+        page,
+        taskA.id,
+        taskB.id,
+      );
+      const requestsAfterManualRender = controller.requests.length;
+      const diagnostics = {
+        timezoneId: "America/Los_Angeles",
+        clockBefore: E22_BEFORE_MIDNIGHT,
+        clockAfter: E22_AFTER_MIDNIGHT,
+        before: { ...before, apiRequests: requestsBefore },
+        after: { ...after, apiRequests: requestsAfter },
+        afterManualRender: {
+          ...afterManualRender,
+          apiRequests: requestsAfterManualRender,
+        },
+      };
+
+      await testInfo.attach("e22-diagnostics", {
+        body: JSON.stringify(diagnostics, null, 2),
+        contentType: "application/json",
+      });
+
+      expect(afterManualRender).toEqual({
+        todayDate: E22_NEXT_DATE,
+        selectedDate: E22_SELECTED_DATE,
+        calendarMode: "month",
+        taskAOverdue: true,
+        taskBIsInTodayCell: true,
+        storedSelectedDate: E22_SELECTED_DATE,
+      });
+      expect(requestsAfterManualRender).toBe(requestsBefore);
+      expect(after).toEqual({
+        todayDate: E22_NEXT_DATE,
+        selectedDate: E22_SELECTED_DATE,
+        calendarMode: "month",
+        taskAOverdue: true,
+        taskBIsInTodayCell: true,
+        storedSelectedDate: E22_SELECTED_DATE,
+      });
+      expect(requestsAfter).toBe(requestsBefore);
+      expect(getRouteRequests(controller, "GET", "/api/v1/state")).toHaveLength(
+        1,
+      );
+      expectNoUnexpectedRequests(controller);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+function createE23LongTextState() {
+  const state = createMockState();
+  const displayName = `E23_PROFILE_${"P".repeat(120)}`;
+  const subjectName = `E23_SUBJECT_${"S".repeat(50)}`;
+  const taskTitle = `E23_TASK_${"T".repeat(180)}`;
+  const subject = {
+    ...state.subjects[0],
+    id: "test-e23-long-subject-001",
+    name: subjectName,
+    normalizedName: subjectName.toLowerCase(),
+  };
+
+  state.profile.displayName = displayName;
+  state.subjects = [subject];
+  state.tasks = [
+    createSyntheticTask({
+      id: "test-e23-long-task-001",
+      title: taskTitle,
+      subjectId: subject.id,
+      currentDeadline: MATRIX_TODAY_KEY,
+      createdAt: "2026-09-11T08:00:00.000Z",
+    }),
+  ];
+  state.syncVersion = 1;
+
+  return { state, displayName, subjectName, taskTitle };
+}
+
+async function getHorizontalOverflowSnapshot(page) {
+  return page.evaluate(() => ({
+    documentScrollWidth: document.documentElement.scrollWidth,
+    documentClientWidth: document.documentElement.clientWidth,
+    bodyScrollWidth: document.body.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+}
+
+async function getWeekLayoutSnapshot(page) {
+  const days = page.locator(".calendar-week-day");
+  const count = await days.count();
+  const boxes = [];
+
+  for (let index = 0; index < count; index += 1) {
+    boxes.push(await days.nth(index).boundingBox());
+  }
+
+  return {
+    count,
+    weekdays: await page
+      .locator(".calendar-week-day__weekday")
+      .allTextContents(),
+    boxes,
+  };
+}
+
+function expectNoHorizontalOverflow(snapshot) {
+  expect.soft(snapshot.documentScrollWidth).toBeLessThanOrEqual(
+    snapshot.documentClientWidth + 1,
+  );
+  expect.soft(snapshot.bodyScrollWidth).toBeLessThanOrEqual(
+    snapshot.viewportWidth + 1,
+  );
+}
+
+function expectMobileWeekLayout(layout) {
+  expect(layout.count).toBe(7);
+  expect(layout.weekdays).toEqual(["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]);
+  expect(layout.boxes.every((box) => box !== null)).toBe(true);
+
+  for (let index = 1; index < layout.boxes.length; index += 1) {
+    expect.soft(layout.boxes[index].y).toBeGreaterThan(
+      layout.boxes[index - 1].y,
+    );
+    expect.soft(
+      Math.abs(layout.boxes[index].x - layout.boxes[0].x),
+    ).toBeLessThanOrEqual(2);
+  }
+}
+
+function expectDesktopWeekLayout(layout) {
+  expect(layout.count).toBe(7);
+  expect(layout.weekdays).toEqual(["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]);
+  expect(layout.boxes.every((box) => box !== null)).toBe(true);
+
+  for (let index = 1; index < layout.boxes.length; index += 1) {
+    expect.soft(
+      Math.abs(layout.boxes[index].y - layout.boxes[0].y),
+    ).toBeLessThanOrEqual(2);
+    expect.soft(layout.boxes[index].x).toBeGreaterThan(
+      layout.boxes[index - 1].x,
+    );
+  }
+}
+
+for (const viewport of [
+  { width: 390, height: 844, layout: "mobile" },
+  { width: 767, height: 900, layout: "mobile" },
+  { width: 768, height: 900, layout: "desktop" },
+  { width: 1280, height: 900, layout: "desktop" },
+]) {
+  test(`E23 ${viewport.width}px has no horizontal overflow and uses ${viewport.layout} week layout`, async ({
+    page,
+  }, testInfo) => {
+    const { state, displayName, subjectName, taskTitle } =
+      createE23LongTextState();
+    const controller = createApiMockController({ state });
+
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height,
+    });
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(page.locator("#profile-name")).toHaveText(displayName);
+
+    await page.locator("#main-tab-calendar").click();
+    await page.locator('.calendar [data-calendar-mode="week"]').click();
+    await expect(page.locator(".calendar")).toHaveAttribute(
+      "data-calendar-mode",
+      "week",
+    );
+    await expect(page.locator(".calendar-task__title")).toHaveText(taskTitle);
+
+    const weekLayout = await getWeekLayoutSnapshot(page);
+    const calendarOverflow = await getHorizontalOverflowSnapshot(page);
+
+    if (viewport.layout === "mobile") {
+      expectMobileWeekLayout(weekLayout);
+    } else {
+      expectDesktopWeekLayout(weekLayout);
+    }
+    expectNoHorizontalOverflow(calendarOverflow);
+
+    await page.locator("#main-tab-tasks").click();
+    const taskCard = getTaskCard(page, "#active-tasks-list", taskTitle);
+
+    await expect(taskCard).toBeVisible();
+    await expect(taskCard).toContainText(subjectName);
+    const tasksOverflow = await getHorizontalOverflowSnapshot(page);
+
+    expectNoHorizontalOverflow(tasksOverflow);
+
+    await testInfo.attach(`e23-${viewport.width}px-diagnostics`, {
+      body: JSON.stringify(
+        {
+          viewport,
+          calendarOverflow,
+          tasksOverflow,
+          weekLayout,
+          longTextLengths: {
+            displayName: displayName.length,
+            subjectName: subjectName.length,
+            taskTitle: taskTitle.length,
+          },
+        },
+        null,
+        2,
+      ),
+      contentType: "application/json",
+    });
+    expectNoUnexpectedRequests(controller);
+  });
+}
+
+async function installUiPreferenceReadCounter(page) {
+  await page.addInitScript((preferencesKey) => {
+    const sessionStorageObject = window.sessionStorage;
+    const originalGetItem = Storage.prototype.getItem;
+
+    window.__e24UiPreferenceReadCount = 0;
+    Storage.prototype.getItem = function (...args) {
+      if (this === sessionStorageObject && args[0] === preferencesKey) {
+        window.__e24UiPreferenceReadCount += 1;
+      }
+
+      return originalGetItem.apply(this, args);
+    };
+  }, UI_PREFERENCES_KEY);
+}
+
+async function getUiPreferenceReadCount(page) {
+  return page.evaluate(() => window.__e24UiPreferenceReadCount);
+}
+
+async function getUiControlSnapshot(page) {
+  return page.evaluate(() => ({
+    activeMainTab:
+      document.querySelector('[data-main-tab][aria-selected="true"]')?.dataset
+        .mainTab ?? null,
+    filters: {
+      status: document.querySelector("#status-filter")?.value ?? null,
+      direction: document.querySelector("#direction-filter")?.value ?? null,
+      subject: document.querySelector("#subject-filter")?.value ?? null,
+    },
+    calendar: {
+      mode: document.querySelector(".calendar")?.dataset.calendarMode ?? null,
+      selectedDate:
+        document.querySelector('.calendar-day[aria-selected="true"]')?.dataset
+          .date ?? null,
+    },
+  }));
+}
+
+const E24_SELECTED_DATE = "2026-09-20";
+
+test.describe("E24 UI state after accepted mutation refresh", () => {
+  test("E24 keeps live UI state and restores preferences only during initial boot", async ({
+    page,
+  }, testInfo) => {
+    const task = createSyntheticTask({
+      id: "test-e24-complete-001",
+      title: "E24 complete task",
+      direction: "Школа",
+      subjectId: createMockState().subjects[0].id,
+      difficulty: "medium",
+      xpReward: 20,
+      currentDeadline: E14_E21_SELECTED_DATE,
+      xpAwarded: false,
+      version: 3,
+      createdAt: "2026-09-12T08:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const pathname = `/api/v1/tasks/${task.id}/complete`;
+    const subjectValue = `subject:${task.subjectId}`;
+    const expectedBeforeMutation = createUiPreferences({
+      activeMainTab: "tasks",
+      status: "active",
+      direction: "Школа",
+      subject: subjectValue,
+      mode: "week",
+      selectedDate: E24_SELECTED_DATE,
+    });
+
+    await installMatrixClock(page);
+    await installUiPreferenceReadCounter(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    const preferenceReadsAfterBoot = await getUiPreferenceReadCount(page);
+
+    await setUiPreferencesThroughControls(page, {
+      activeMainTab: "tasks",
+      status: "active",
+      direction: "Школа",
+      subject: subjectValue,
+      mode: "week",
+      selectedDate: E24_SELECTED_DATE,
+    });
+    await expectUiPreferencesInDom(page, expectedBeforeMutation);
+    const uiBeforeMutation = await getUiControlSnapshot(page);
+    const storedBeforeMutation = await getStoredUiPreferences(page);
+    const preferenceReadsBeforeMutation = await getUiPreferenceReadCount(page);
+    const stateRequestsBeforeMutation = getRouteRequests(
+      controller,
+      "GET",
+      "/api/v1/state",
+    ).length;
+    const authRequestsBeforeMutation = getRouteRequests(
+      controller,
+      "GET",
+      "/api/v1/auth/me",
+    ).length;
+    const csrfRequestsBeforeMutation = getRouteRequests(
+      controller,
+      "POST",
+      "/api/v1/auth/csrf",
+    ).length;
+
+    expect(storedBeforeMutation).toEqual(expectedBeforeMutation);
+    await getTaskCard(page, "#active-tasks-list", task.title)
+      .locator(".task-card__complete-button")
+      .click();
+
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title),
+    ).toHaveCount(0);
+    await expect(page.locator("#profile-total-xp")).toHaveText("20");
+    await expectUiPreferencesInDom(page, expectedBeforeMutation);
+
+    const uiAfterMutation = await getUiControlSnapshot(page);
+    const preferenceReadsAfterMutation = await getUiPreferenceReadCount(page);
+    const stateRequestsAfterMutation = getRouteRequests(
+      controller,
+      "GET",
+      "/api/v1/state",
+    ).length;
+    const mutationCount = getRouteRequests(
+      controller,
+      "POST",
+      pathname,
+    ).length;
+
+    expect(mutationCount).toBe(1);
+    expect(stateRequestsAfterMutation).toBe(stateRequestsBeforeMutation + 1);
+    expect(preferenceReadsAfterMutation).toBe(
+      preferenceReadsBeforeMutation,
+    );
+    expect(
+      getRouteRequests(controller, "GET", "/api/v1/auth/me"),
+    ).toHaveLength(authRequestsBeforeMutation);
+    expect(
+      getRouteRequests(controller, "POST", "/api/v1/auth/csrf"),
+    ).toHaveLength(csrfRequestsBeforeMutation);
+    expect(uiAfterMutation).toEqual(uiBeforeMutation);
+    expect(controller.state.tasks[0].status).toBe("completed");
+    expect(controller.state.tasks[0].xpAwarded).toBe(true);
+    expect(controller.state.profile.totalXp).toBe(20);
+
+    await page.locator("#main-tab-calendar").click();
+    const expectedAfterCalendarOpen = {
+      ...expectedBeforeMutation,
+      activeMainTab: "calendar",
+    };
+
+    await expectUiPreferencesInDom(page, expectedAfterCalendarOpen);
+    expect(await getStoredUiPreferences(page)).toEqual(
+      expectedAfterCalendarOpen,
+    );
+    await expect(
+      page.locator(
+        `.calendar-task[data-task-id="${task.id}"]`,
+      ),
+    ).toHaveCount(0);
+
+    await testInfo.attach("e24-diagnostics", {
+      body: JSON.stringify(
+        {
+          uiBeforeMutation,
+          uiAfterMutation,
+          preferenceReadsAfterBoot,
+          preferenceReadsBeforeMutation,
+          preferenceReadsAfterMutation,
+          mutationCount,
+          stateRequestsBeforeMutation,
+          stateRequestsAfterMutation,
+          authRequestsBeforeMutation,
+          csrfRequestsBeforeMutation,
+          serverResult: {
+            taskStatus: controller.state.tasks[0].status,
+            xpAwarded: controller.state.tasks[0].xpAwarded,
+            totalXp: controller.state.profile.totalXp,
+            level: controller.state.profile.level,
+          },
+        },
+        null,
+        2,
+      ),
+      contentType: "application/json",
+    });
+    expectNoUnexpectedRequests(controller);
+  });
+});
+
 module.exports = {
   LOCAL_ORIGIN,
   createApiMockController,
