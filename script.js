@@ -11,6 +11,8 @@ const FILTER_WITHOUT_SUBJECT = "__without_subject__";
 const FILTER_SUBJECT_PREFIX = "subject:";
 const UI_PREFERENCES_STORAGE_KEY = "level-up:ui-preferences";
 const UI_PREFERENCES_VERSION = 1;
+const UI_PREFERENCES_STORAGE_WARNING =
+  "Не удалось сохранить настройки экрана. После обновления страницы они могут не восстановиться.";
 const MAIN_TAB_NAMES = Object.freeze(["tasks", "calendar", "archive"]);
 const DIRECTIONS = Object.freeze([
   "Школа",
@@ -538,15 +540,64 @@ function createDefaultUiPreferences() {
 }
 
 function readUiPreferences() {
+  let storedValue;
+
   try {
-    const storedValue = window.sessionStorage.getItem(
+    storedValue = window.sessionStorage.getItem(
       UI_PREFERENCES_STORAGE_KEY,
     );
+  } catch {
+    showUiPreferencesStorageWarning();
+    return null;
+  }
 
-    return storedValue === null ? null : JSON.parse(storedValue);
+  if (storedValue === null) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(storedValue);
   } catch {
     return null;
   }
+}
+
+function getUiPreferencesStorageWarning() {
+  let warning = document.querySelector("#ui-preferences-storage-warning");
+
+  if (warning) {
+    return warning;
+  }
+
+  warning = document.createElement("p");
+  warning.id = "ui-preferences-storage-warning";
+  warning.className =
+    "form-status main-interface-status form-status--error";
+  warning.setAttribute("role", "status");
+  warning.setAttribute("aria-live", "polite");
+  warning.hidden = true;
+  elements.mainInterface
+    .querySelector(".main-tabs")
+    .insertAdjacentElement("afterend", warning);
+  return warning;
+}
+
+function showUiPreferencesStorageWarning() {
+  const warning = getUiPreferencesStorageWarning();
+
+  warning.textContent = UI_PREFERENCES_STORAGE_WARNING;
+  warning.hidden = false;
+}
+
+function hideUiPreferencesStorageWarning() {
+  const warning = document.querySelector("#ui-preferences-storage-warning");
+
+  if (!warning) {
+    return;
+  }
+
+  warning.hidden = true;
+  warning.textContent = "";
 }
 
 function writeUiPreferences(value) {
@@ -555,8 +606,9 @@ function writeUiPreferences(value) {
       UI_PREFERENCES_STORAGE_KEY,
       JSON.stringify(value),
     );
+    hideUiPreferencesStorageWarning();
   } catch {
-    // Preferences are optional and must not interrupt the application.
+    showUiPreferencesStorageWarning();
   }
 }
 
