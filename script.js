@@ -1080,6 +1080,18 @@ function handleCalendarViewportChange() {
   }
 }
 
+function handleDocumentVisibilityChange() {
+  if (
+    document.visibilityState !== "visible" ||
+    currentUser === null ||
+    elements.mainInterface.hidden
+  ) {
+    return;
+  }
+
+  renderTaskLists();
+}
+
 function createCalendarTaskPill(task, todayKey) {
   const pill = document.createElement("span");
   const title = document.createElement("span");
@@ -3217,6 +3229,10 @@ async function initializeApp() {
   elements.directionFilter.addEventListener("change", handleTaskFiltersChange);
   elements.subjectFilter.addEventListener("change", handleTaskFiltersChange);
   document.addEventListener("keydown", handleDocumentKeydown);
+  document.addEventListener(
+    "visibilitychange",
+    handleDocumentVisibilityChange,
+  );
   window.addEventListener("resize", handleCalendarViewportChange);
   window.addEventListener("scroll", positionCalendarTaskTooltip, true);
 
