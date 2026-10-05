@@ -1859,6 +1859,15 @@ async function loadServerState({ initialUiPreferences = null } = {}) {
     initialUiPreferences?.filters.subject,
   );
 
+  if (initialUiPreferences !== null) {
+    setFiltersPanelOpen(
+      initialUiPreferences.activeMainTab === "tasks" &&
+        (elements.statusFilter.value !== FILTER_ALL ||
+          elements.directionFilter.value !== FILTER_ALL ||
+          elements.subjectFilter.value !== FILTER_ALL),
+    );
+  }
+
   if (subjectFilterDidFallback) {
     saveUiPreferences();
   }

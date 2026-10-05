@@ -2833,6 +2833,69 @@ async function expectDefaultUiPreferences(page) {
 }
 
 test.describe("E14 UI preferences survive refresh", () => {
+  test("E14 derives the task filter panel from restored filter values", async ({
+    page,
+  }) => {
+    const controller = createApiMockController();
+    const subjectValue = `subject:${controller.state.subjects[0].id}`;
+    const expected = createUiPreferences({
+      activeMainTab: "tasks",
+      status: "overdue",
+      direction: controller.state.tasks[0].direction,
+      subject: subjectValue,
+      mode: "day",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+    const expectedDefaults = createUiPreferences({
+      activeMainTab: "tasks",
+      mode: "day",
+      selectedDate: E14_E21_SELECTED_DATE,
+    });
+
+    await installMatrixClock(page);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await setUiPreferencesThroughControls(page, {
+      activeMainTab: expected.activeMainTab,
+      status: expected.filters.status,
+      direction: expected.filters.direction,
+      subject: expected.filters.subject,
+      mode: expected.calendar.mode,
+      selectedDate: expected.calendar.selectedDate,
+    });
+    await expect(page.locator("#filters-panel")).toBeVisible();
+    await page.locator("#filters-toggle").click();
+    await expect(page.locator("#filters-panel")).toBeHidden();
+
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectUiPreferencesInDom(page, expected);
+    await expect(page.locator("#filters-panel")).toBeVisible();
+    await expect(page.locator("#filters-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(await getStoredUiPreferences(page)).toEqual(expected);
+
+    await page.locator("#filters-reset-button").click();
+    await expectUiPreferencesInDom(page, expectedDefaults);
+    expect(await getStoredUiPreferences(page)).toEqual(expectedDefaults);
+    await page.locator("#filters-toggle").click();
+    await expect(page.locator("#filters-panel")).toBeHidden();
+
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectUiPreferencesInDom(page, expectedDefaults);
+    await expect(page.locator("#filters-panel")).toBeHidden();
+    await expect(page.locator("#filters-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(await getStoredUiPreferences(page)).toEqual(expectedDefaults);
+    expectNoUnexpectedRequests(controller);
+  });
+
   test("E14 restores non-default UI after F5 using fresh auth, CSRF and state", async ({
     page,
   }) => {
