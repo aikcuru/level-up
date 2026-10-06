@@ -1372,9 +1372,17 @@ function createCalendarDayOverviewTask(task, todayParts) {
 
   if (task.status === "active") {
     const actions = document.createElement("div");
+    const completeButton = document.createElement("button");
     const editButton = document.createElement("button");
+    const deleteButton = document.createElement("button");
 
     actions.className = "task-card__actions";
+    completeButton.className =
+      "task-card__action-button task-card__complete-button";
+    completeButton.type = "button";
+    completeButton.disabled = mutationPending || taskStateRefreshPending;
+    completeButton.textContent = "Выполнено";
+    completeButton.addEventListener("click", () => completeTask(task.id));
     editButton.className =
       "task-card__action-button task-card__edit-button";
     editButton.type = "button";
@@ -1384,7 +1392,13 @@ function createCalendarDayOverviewTask(task, todayParts) {
       setActiveMainTab("tasks");
       startEditingTask(task.id);
     });
-    actions.append(editButton);
+    deleteButton.className =
+      "task-card__action-button task-card__delete-button";
+    deleteButton.type = "button";
+    deleteButton.disabled = mutationPending || taskStateRefreshPending;
+    deleteButton.textContent = "Удалить";
+    deleteButton.addEventListener("click", () => deleteTask(task.id));
+    actions.append(completeButton, editButton, deleteButton);
     item.append(actions);
   }
 

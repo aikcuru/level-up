@@ -1995,6 +1995,21 @@ function getTaskCard(page, listSelector, title) {
   return page.locator(`${listSelector} .task-card`).filter({ hasText: title });
 }
 
+function getCalendarOverviewTask(page, title) {
+  return page
+    .locator("#calendar-selected-tasks .calendar-day-task")
+    .filter({ hasText: title });
+}
+
+async function expectTaskActionButtonsDisabled(task) {
+  const buttons = task.locator(".task-card__action-button");
+
+  await expect(buttons).toHaveCount(3);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(buttons.nth(index)).toBeDisabled();
+  }
+}
+
 function getRouteRequests(controller, method, pathname) {
   return controller.requests.filter(
     (request) => request.method === method && request.pathname === pathname,
@@ -2094,7 +2109,7 @@ test.describe("E10 mutation lifecycle", () => {
     expectNoUnexpectedRequests(controller);
   });
 
-  test("E10 completes once and renders authoritative archive and XP state", async ({
+  test("E10 completes once from Day and preserves calendar UI", async ({
     page,
   }) => {
     const task = createSyntheticTask({
@@ -2134,28 +2149,36 @@ test.describe("E10 mutation lifecycle", () => {
       },
     );
 
-    await bootAuthenticatedTasks(page, controller);
+    const expectedUi = createUiPreferences({
+      mode: "day",
+      selectedDate: MATRIX_TODAY_KEY,
+    });
+
+    await installMatrixClock(page);
+    await seedUiPreferences(page, expectedUi);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-panel-calendar")).toBeVisible();
     const requestStartIndex = controller.requests.length;
-    const activeCard = getTaskCard(page, "#active-tasks-list", task.title);
+    const overviewTask = getCalendarOverviewTask(page, task.title);
 
     try {
-      await activeCard.locator(".task-card__complete-button").click();
+      await overviewTask.locator(".task-card__complete-button").click();
       await expect.poll(() => capturedRequest).not.toBeNull();
 
       expect(capturedRequest).toEqual({
         body: { version: 3 },
         csrf: TEST_CSRF_TOKEN,
       });
-      await expect(activeCard).not.toHaveClass(/task-card--completed/);
-      await expect(activeCard.locator(".task-badge")).toContainText("Активная");
+      await expect(overviewTask).toBeVisible();
+      await expectTaskActionButtonsDisabled(overviewTask);
       expect(controller.state.tasks[0].status).toBe("active");
     } finally {
       mutationGate.resolve();
     }
 
-    await expect(
-      getTaskCard(page, "#active-tasks-list", task.title),
-    ).toHaveCount(0);
+    await expect(getCalendarOverviewTask(page, task.title)).toHaveCount(0);
+    await expect(page.locator("#calendar-selected-empty")).toBeVisible();
     expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
     expect(
       controller.requests.slice(requestStartIndex).map(
@@ -2171,21 +2194,17 @@ test.describe("E10 mutation lifecycle", () => {
       "aria-valuenow",
       "50",
     );
-
-    await page.locator("#main-tab-archive").click();
+    await expectUiPreferencesInDom(page, expectedUi);
+    expect(await getStoredUiPreferences(page)).toEqual(expectedUi);
+    expect(controller.state.tasks[0].status).toBe("completed");
+    expect(controller.state.tasks[0].xpAwarded).toBe(true);
     await expect(
       getTaskCard(page, "#completed-tasks-list", task.title),
-    ).toBeVisible();
-    await page.locator("#main-tab-calendar").click();
-    await expect(
-      page.locator(
-        `.calendar-day[data-date="${MATRIX_TODAY_KEY}"] .calendar-task__title`,
-      ),
-    ).toHaveCount(0);
+    ).toHaveCount(1);
     expectNoUnexpectedRequests(controller);
   });
 
-  test("E10 deletes once only after response and fresh state", async ({ page }) => {
+  test("E10 deletes once from Day and preserves calendar UI", async ({ page }) => {
     const task = createSyntheticTask({
       id: "test-e10-delete-001",
       title: "E10 delete task",
@@ -2198,13 +2217,17 @@ test.describe("E10 mutation lifecycle", () => {
     });
     const pathname = `/api/v1/tasks/${task.id}`;
     const mutationGate = createDeferred();
-    let capturedBody = null;
+    let capturedRequest = null;
+    let confirmationMessage = null;
 
     controller.setRouteOverride(
       "DELETE",
       pathname,
       async ({ route, request, controller: activeController, body }) => {
-        capturedBody = deepClone(body);
+        capturedRequest = {
+          body: deepClone(body),
+          csrf: request.headers()["x-csrf-token"],
+        };
         await mutationGate.promise;
         await handleDeleteTask(
           route,
@@ -2217,25 +2240,41 @@ test.describe("E10 mutation lifecycle", () => {
       },
     );
 
-    await bootAuthenticatedTasks(page, controller);
+    const expectedUi = createUiPreferences({
+      mode: "day",
+      selectedDate: MATRIX_TODAY_KEY,
+    });
+
+    await installMatrixClock(page);
+    await seedUiPreferences(page, expectedUi);
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+    await expect(page.locator("#main-panel-calendar")).toBeVisible();
     const requestStartIndex = controller.requests.length;
-    const activeCard = getTaskCard(page, "#active-tasks-list", task.title);
-    page.once("dialog", (dialog) => dialog.accept());
+    const overviewTask = getCalendarOverviewTask(page, task.title);
+    page.once("dialog", async (dialog) => {
+      confirmationMessage = dialog.message();
+      await dialog.accept();
+    });
 
     try {
-      await activeCard.locator(".task-card__delete-button").click();
-      await expect.poll(() => capturedBody).not.toBeNull();
+      await overviewTask.locator(".task-card__delete-button").click();
+      await expect.poll(() => capturedRequest).not.toBeNull();
 
-      expect(capturedBody).toEqual({ version: 6 });
-      await expect(activeCard).toBeVisible();
+      expect(confirmationMessage).toBe(`Удалить задачу «${task.title}»?`);
+      expect(capturedRequest).toEqual({
+        body: { version: 6 },
+        csrf: TEST_CSRF_TOKEN,
+      });
+      await expect(overviewTask).toBeVisible();
+      await expectTaskActionButtonsDisabled(overviewTask);
       expect(controller.state.tasks).toHaveLength(1);
     } finally {
       mutationGate.resolve();
     }
 
-    await expect(
-      getTaskCard(page, "#active-tasks-list", task.title),
-    ).toHaveCount(0);
+    await expect(getCalendarOverviewTask(page, task.title)).toHaveCount(0);
+    await expect(page.locator("#calendar-selected-empty")).toBeVisible();
     expect(getRouteRequests(controller, "DELETE", pathname)).toHaveLength(1);
     expect(
       controller.requests.slice(requestStartIndex).map(
@@ -2243,12 +2282,9 @@ test.describe("E10 mutation lifecycle", () => {
       ),
     ).toEqual([`DELETE ${pathname}`, "GET /api/v1/state"]);
 
-    await page.locator("#main-tab-calendar").click();
-    await expect(
-      page.locator(
-        `.calendar-day[data-date="${MATRIX_TODAY_KEY}"] .calendar-task__title`,
-      ),
-    ).toHaveCount(0);
+    await expectUiPreferencesInDom(page, expectedUi);
+    expect(await getStoredUiPreferences(page)).toEqual(expectedUi);
+    expect(controller.state.tasks).toHaveLength(0);
     expectNoUnexpectedRequests(controller);
   });
 });
@@ -2275,13 +2311,23 @@ test.describe("E11 editing contracts", () => {
     await installApiMock(page, controller);
     await page.goto("/index.html");
     await expect(page.locator("#main-panel-calendar")).toBeVisible();
-    const overviewTask = page
-      .locator("#calendar-selected-tasks .calendar-day-task")
-      .filter({ hasText: task.title });
+    const overviewTask = getCalendarOverviewTask(page, task.title);
+    const actionButtons = overviewTask.locator(".task-card__action-button");
     const editButton = overviewTask.getByRole("button", {
       name: "Редактировать",
     });
 
+    await expect(actionButtons).toHaveText([
+      "Выполнено",
+      "Редактировать",
+      "Удалить",
+    ]);
+    await actionButtons.nth(0).focus();
+    await expect(actionButtons.nth(0)).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(actionButtons.nth(1)).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(actionButtons.nth(2)).toBeFocused();
     await expect(editButton).toBeVisible();
     await editButton.click();
     await expect(page.locator("#main-panel-tasks")).toBeVisible();
