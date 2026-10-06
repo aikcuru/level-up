@@ -988,6 +988,8 @@ test.describe("smoke/auth/state", () => {
 
 const MATRIX_FIXED_TIME_MS = Date.UTC(2026, 8, 18, 4, 0, 0);
 const MATRIX_TODAY_KEY = "2026-09-18";
+const TASK_FORM_REPLACEMENT_CONFIRMATION =
+  "Заменить несохранённый черновик? Внесённые изменения будут потеряны.";
 
 async function installMatrixClock(page) {
   await page.clock.install({ time: new Date(MATRIX_FIXED_TIME_MS) });
@@ -1493,6 +1495,17 @@ test.describe("E05-E09 required matrix", () => {
       "subject:test-subject-math-001",
     );
     expect(controller.requests).toHaveLength(requestCountAfterBoot);
+    expectNoUnexpectedRequests(controller);
+
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(page.locator("#task-form-panel")).toBeHidden();
+    await page.locator("#task-form-toggle").click();
+    await expect(page.locator("#task-title-input")).toHaveValue("");
+    await expect(page.locator("#task-direction-select")).toHaveValue("");
+    await expect(page.locator("#task-subject-select")).toHaveValue("");
+    await expect(page.locator("#task-difficulty-select")).toHaveValue("");
+    await expect(page.locator("#task-deadline-input")).toHaveValue("");
     expectNoUnexpectedRequests(controller);
   });
 
@@ -2026,6 +2039,16 @@ async function openTaskEditor(page, title) {
   await expect(page.locator("#task-title-input")).toBeFocused();
 }
 
+async function fillSyntheticTaskDraft(page, title) {
+  await page.locator("#task-title-input").fill(title);
+  await page.locator("#task-direction-select").selectOption("Школа");
+  await page
+    .locator("#task-subject-select")
+    .selectOption("test-subject-math-001");
+  await page.locator("#task-difficulty-select").selectOption("hard");
+  await page.locator("#task-deadline-input").fill("2026-10-05");
+}
+
 test.describe("E10 mutation lifecycle", () => {
   test("E10 updates only deadline after mutation response and fresh state", async ({
     page,
@@ -2306,15 +2329,29 @@ test.describe("E11 editing contracts", () => {
     await installMatrixClock(page);
     await seedUiPreferences(
       page,
-      createUiPreferences({ mode: "day", selectedDate: MATRIX_TODAY_KEY }),
+      createUiPreferences({
+        activeMainTab: "tasks",
+        mode: "day",
+        selectedDate: MATRIX_TODAY_KEY,
+      }),
     );
     await installApiMock(page, controller);
     await page.goto("/index.html");
+    await expect(page.locator("#main-panel-tasks")).toBeVisible();
+    await page.locator("#task-form-toggle").click();
+    await expect(page.locator("#task-form-panel")).toBeVisible();
+    await page.locator("#main-tab-calendar").click();
     await expect(page.locator("#main-panel-calendar")).toBeVisible();
     const overviewTask = getCalendarOverviewTask(page, task.title);
     const actionButtons = overviewTask.locator(".task-card__action-button");
     const editButton = overviewTask.getByRole("button", {
       name: "Редактировать",
+    });
+    let dialogCount = 0;
+
+    page.on("dialog", async (dialog) => {
+      dialogCount += 1;
+      await dialog.dismiss();
     });
 
     await expect(actionButtons).toHaveText([
@@ -2336,6 +2373,7 @@ test.describe("E11 editing contracts", () => {
     );
     await expect(page.locator("#task-title-input")).toHaveValue(task.title);
     await expect(page.locator("#task-title-input")).toBeFocused();
+    expect(dialogCount).toBe(0);
     await page.locator("#main-tab-calendar").click();
     await expect(page.locator(".calendar")).toHaveAttribute(
       "data-calendar-mode",
@@ -2344,6 +2382,163 @@ test.describe("E11 editing contracts", () => {
     await expect(page.locator("#calendar-month")).toHaveText(
       "18 сентября 2026",
     );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E11 keeps a dirty create draft when Calendar edit replacement is cancelled", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e11-dirty-create-cancel-001",
+      title: "E11 replacement target",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 4,
+      createdAt: "2026-09-04T09:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    const draftTitle = "Черновик перед заменой";
+    let confirmationMessage = null;
+
+    await bootAuthenticatedTasks(page, controller);
+    await page.locator("#task-form-toggle").click();
+    await fillSyntheticTaskDraft(page, draftTitle);
+    await page.locator("#main-tab-calendar").click();
+    await page.locator('[data-calendar-mode="day"]').click();
+    page.once("dialog", async (dialog) => {
+      confirmationMessage = dialog.message();
+      await dialog.dismiss();
+    });
+
+    await getCalendarOverviewTask(page, task.title)
+      .getByRole("button", { name: "Редактировать" })
+      .click();
+
+    expect(confirmationMessage).toBe(TASK_FORM_REPLACEMENT_CONFIRMATION);
+    await expect(page.locator("#main-panel-calendar")).toBeVisible();
+    await expect(page.locator(".calendar")).toHaveAttribute(
+      "data-calendar-mode",
+      "day",
+    );
+    await expect(page.locator("#calendar-month")).toHaveText(
+      "18 сентября 2026",
+    );
+    await expect(page.locator("#task-form-heading")).toHaveText("Новая задача");
+    await expect(page.locator("#task-title-input")).toHaveValue(draftTitle);
+
+    await page.locator("#main-tab-tasks").click();
+    await expect(page.locator("#task-form-panel")).toBeVisible();
+    await expect(page.locator("#task-title-input")).toHaveValue(draftTitle);
+    await expect(page.locator("#task-direction-select")).toHaveValue("Школа");
+    await expect(page.locator("#task-subject-select")).toHaveValue(
+      "test-subject-math-001",
+    );
+    await expect(page.locator("#task-difficulty-select")).toHaveValue("hard");
+    await expect(page.locator("#task-deadline-input")).toHaveValue(
+      "2026-10-05",
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E11 replaces a dirty create draft after Calendar edit confirmation", async ({
+    page,
+  }) => {
+    const task = createSyntheticTask({
+      id: "test-e11-dirty-create-confirm-001",
+      title: "E11 confirmed replacement target",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 6,
+      createdAt: "2026-09-04T10:00:00.000Z",
+    });
+    const controller = createApiMockController({
+      state: createSingleActiveTaskState(task),
+    });
+    let confirmationMessage = null;
+
+    await bootAuthenticatedTasks(page, controller);
+    await page.locator("#task-form-toggle").click();
+    await fillSyntheticTaskDraft(page, "E11 discarded create draft");
+    await page.locator("#main-tab-calendar").click();
+    await page.locator('[data-calendar-mode="day"]').click();
+    page.once("dialog", async (dialog) => {
+      confirmationMessage = dialog.message();
+      await dialog.accept();
+    });
+
+    await getCalendarOverviewTask(page, task.title)
+      .getByRole("button", { name: "Редактировать" })
+      .click();
+
+    expect(confirmationMessage).toBe(TASK_FORM_REPLACEMENT_CONFIRMATION);
+    await expect(page.locator("#main-panel-tasks")).toBeVisible();
+    await expect(page.locator("#task-form")).toHaveCount(1);
+    await expect(page.locator("#task-form-heading")).toHaveText(
+      "Редактирование задачи",
+    );
+    await expect(page.locator("#task-form-context")).toHaveText(
+      `Редактируется: ${task.title}`,
+    );
+    await expect(page.locator("#task-title-input")).toHaveValue(task.title);
+    await expect(page.locator("#task-direction-select")).toHaveValue(
+      task.direction,
+    );
+    await expect(page.locator("#task-difficulty-select")).toHaveValue(
+      task.difficulty,
+    );
+    await expect(page.locator(".calendar")).toHaveAttribute(
+      "data-calendar-mode",
+      "day",
+    );
+    await expect(page.locator("#calendar-month")).toHaveText(
+      "18 сентября 2026",
+    );
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("E11 keeps a dirty edit draft when another task replacement is cancelled", async ({
+    page,
+  }) => {
+    const firstTask = createSyntheticTask({
+      id: "test-e11-dirty-edit-first-001",
+      title: "E11 first edit task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 3,
+      createdAt: "2026-09-04T11:00:00.000Z",
+    });
+    const secondTask = createSyntheticTask({
+      id: "test-e11-dirty-edit-second-001",
+      title: "E11 second edit task",
+      currentDeadline: MATRIX_TODAY_KEY,
+      version: 7,
+      createdAt: "2026-09-04T12:00:00.000Z",
+    });
+    const state = createSingleActiveTaskState(firstTask);
+    const editedTitle = "E11 first unsaved edit";
+    let confirmationMessage = null;
+
+    state.tasks.push(secondTask);
+    const controller = createApiMockController({ state });
+
+    await bootAuthenticatedTasks(page, controller);
+    await openTaskEditor(page, firstTask.title);
+    await page.locator("#task-title-input").fill(editedTitle);
+    page.once("dialog", async (dialog) => {
+      confirmationMessage = dialog.message();
+      await dialog.dismiss();
+    });
+
+    await getTaskCard(page, "#active-tasks-list", secondTask.title)
+      .locator(".task-card__edit-button")
+      .click();
+
+    expect(confirmationMessage).toBe(TASK_FORM_REPLACEMENT_CONFIRMATION);
+    await expect(page.locator("#main-panel-tasks")).toBeVisible();
+    await expect(page.locator("#task-form-panel")).toBeVisible();
+    await expect(page.locator("#task-form-context")).toHaveText(
+      `Редактируется: ${firstTask.title}`,
+    );
+    await expect(page.locator("#task-title-input")).toHaveValue(editedTitle);
     expectNoUnexpectedRequests(controller);
   });
 

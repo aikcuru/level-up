@@ -13,6 +13,8 @@ const UI_PREFERENCES_STORAGE_KEY = "level-up:ui-preferences";
 const UI_PREFERENCES_VERSION = 1;
 const UI_PREFERENCES_STORAGE_WARNING =
   "Не удалось сохранить настройки экрана. После обновления страницы они могут не восстановиться.";
+const TASK_FORM_REPLACEMENT_CONFIRMATION =
+  "Заменить несохранённый черновик? Внесённые изменения будут потеряны.";
 const MAIN_TAB_NAMES = Object.freeze(["tasks", "calendar", "archive"]);
 const DIRECTIONS = Object.freeze([
   "Школа",
@@ -220,6 +222,7 @@ let uiPreferencesReady = false;
 let activeTasksExpanded = true;
 let editingTaskId = null;
 let editingTaskVersionAtOpen = null;
+let taskFormInitialValues = null;
 const initialCalendarToday = getLocalTodayParts();
 let calendarMode = "month";
 let selectedCalendarDate = toCalendarDateKey(initialCalendarToday);
@@ -1388,10 +1391,7 @@ function createCalendarDayOverviewTask(task, todayParts) {
     editButton.type = "button";
     editButton.disabled = mutationPending || taskStateRefreshPending;
     editButton.textContent = "Редактировать";
-    editButton.addEventListener("click", () => {
-      setActiveMainTab("tasks");
-      startEditingTask(task.id);
-    });
+    editButton.addEventListener("click", () => startEditingTask(task.id));
     deleteButton.className =
       "task-card__action-button task-card__delete-button";
     deleteButton.type = "button";
@@ -2523,6 +2523,32 @@ async function refreshStateAfterAcceptedMutation() {
   }
 }
 
+function getTaskFormValues() {
+  return {
+    title: elements.taskTitleInput.value,
+    direction: elements.taskDirectionSelect.value,
+    subject: elements.taskSubjectSelect.value,
+    difficulty: elements.taskDifficultySelect.value,
+    deadline: elements.taskDeadlineInput.value,
+  };
+}
+
+function captureTaskFormInitialValues() {
+  taskFormInitialValues = getTaskFormValues();
+}
+
+function isTaskFormDirty() {
+  const currentValues = getTaskFormValues();
+
+  return taskFormInitialValues !== null && Object.keys(currentValues).some(
+    (field) => currentValues[field] !== taskFormInitialValues[field],
+  );
+}
+
+function confirmTaskFormReplacement() {
+  return !isTaskFormDirty() || window.confirm(TASK_FORM_REPLACEMENT_CONFIRMATION);
+}
+
 function setTaskFormCreateMode({ resetForm = false } = {}) {
   editingTaskId = null;
   editingTaskVersionAtOpen = null;
@@ -2537,6 +2563,7 @@ function setTaskFormCreateMode({ resetForm = false } = {}) {
     clearTaskErrors();
     updateSubjectField();
     updateDifficultyPreview();
+    captureTaskFormInitialValues();
   }
 }
 
@@ -2555,9 +2582,22 @@ function startEditingTask(taskId) {
   );
 
   if (!task) {
-    return;
+    return false;
   }
 
+  if (editingTaskId === task.id) {
+    setActiveMainTab("tasks");
+    setActiveTasksExpanded(true);
+    setTaskFormPanelOpen(true);
+    elements.taskTitleInput.focus();
+    return true;
+  }
+
+  if (!confirmTaskFormReplacement()) {
+    return false;
+  }
+
+  setActiveMainTab("tasks");
   editingTaskId = task.id;
   editingTaskVersionAtOpen = task.version;
   clearTaskErrors();
@@ -2575,9 +2615,11 @@ function startEditingTask(taskId) {
   elements.taskDifficultySelect.value = task.difficulty;
   elements.taskDeadlineInput.value = task.currentDeadline;
   updateDifficultyPreview();
+  captureTaskFormInitialValues();
   setActiveTasksExpanded(true);
   setTaskFormPanelOpen(true);
   elements.taskTitleInput.focus();
+  return true;
 }
 
 async function handleSubjectSubmit(event) {
@@ -2838,6 +2880,7 @@ async function handleTaskSubmit(event) {
     elements.taskForm.reset();
     updateSubjectField();
     updateDifficultyPreview();
+    captureTaskFormInitialValues();
     setActiveTasksExpanded(true);
     setTaskFormPanelOpen(false);
 
@@ -2873,6 +2916,10 @@ function setFiltersPanelOpen(isOpen) {
 
 function toggleTaskFormPanel() {
   if (editingTaskId !== null) {
+    if (!confirmTaskFormReplacement()) {
+      return;
+    }
+
     cancelTaskEditing({ closePanel: false });
     setTaskFormPanelOpen(true);
     elements.taskTitleInput.focus();
@@ -3271,6 +3318,7 @@ async function initializeApp() {
 
   updateSubjectField();
   updateDifficultyPreview();
+  captureTaskFormInitialValues();
   setActiveMainTab("tasks");
   await restoreSession();
 }
