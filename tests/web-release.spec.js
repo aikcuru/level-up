@@ -1749,6 +1749,9 @@ test.describe("E08-E09 calendar task rendering", () => {
     );
     await emptyCell.click();
     await expect(emptyCell).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#calendar-day-overview")).toBeVisible();
+    await expect(page.locator("#calendar-selected-empty")).toBeVisible();
+    await expectCalendarOverviewOrder(page, []);
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator("#calendar-day-overview")).toBeVisible();
     await expect(page.locator("#calendar-selected-empty")).toBeVisible();
@@ -1773,6 +1776,8 @@ test.describe("E08-E09 calendar task rendering", () => {
     await expect(page.locator("#calendar-task-tooltip")).toBeHidden();
 
     await oneCell.locator(".calendar-day__button").click();
+    await expect(oneCell).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#calendar-day-overview")).toBeVisible();
     await expect(page.locator("#calendar-selected-empty")).toBeHidden();
     await expectCalendarOverviewOrder(
       page,
@@ -1786,6 +1791,7 @@ test.describe("E08-E09 calendar task rendering", () => {
     await expect(threeCell.locator(".calendar-task")).toHaveCount(3);
     await expect(threeCell.locator(".calendar-day__more")).toHaveCount(0);
     await threeCell.locator(".calendar-day__button").click();
+    await expect(page.locator("#calendar-day-overview")).toBeVisible();
     await expectCalendarOverviewOrder(
       page,
       getDescendingTaskTitles("e08-three", 3),
@@ -1796,10 +1802,16 @@ test.describe("E08-E09 calendar task rendering", () => {
     );
 
     await expect(fourCell.locator(".calendar-task")).toHaveCount(3);
-    await expect(fourCell.locator(".calendar-day__more")).toHaveText(
-      "+ ещё 1",
-    );
-    await fourCell.locator(".calendar-day__button").click();
+    const fourMoreButton = fourCell.getByRole("button", {
+      name: /Показать все активные задачи/,
+    });
+
+    await expect(fourMoreButton).toBeVisible();
+    await expect(fourMoreButton).toHaveText("+ ещё 1");
+    await fourMoreButton.click();
+    await expect(fourCell).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#calendar-day-overview")).toBeVisible();
+    await expect(page.locator("#calendar-selected-date")).toBeFocused();
     await expectCalendarOverviewOrder(
       page,
       getDescendingTaskTitles("e08-four", 4),
@@ -1810,10 +1822,18 @@ test.describe("E08-E09 calendar task rendering", () => {
     );
 
     await expect(sixCell.locator(".calendar-task")).toHaveCount(3);
-    await expect(sixCell.locator(".calendar-day__more")).toHaveText(
-      "+ ещё 3",
-    );
-    await sixCell.locator(".calendar-day__button").click();
+    const sixMoreButton = sixCell.getByRole("button", {
+      name: /Показать все активные задачи/,
+    });
+
+    await expect(sixMoreButton).toHaveText("+ ещё 3");
+    await sixCell.locator(".calendar-task").nth(2).focus();
+    await page.keyboard.press("Tab");
+    await expect(sixMoreButton).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(sixCell).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#calendar-day-overview")).toBeVisible();
+    await expect(page.locator("#calendar-selected-date")).toBeFocused();
     await expectCalendarOverviewOrder(
       page,
       getDescendingTaskTitles("e08-six", 6),

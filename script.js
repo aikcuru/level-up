@@ -1194,10 +1194,20 @@ function createCalendarDayButton(parts, tasks, todayKey) {
     cell.append(tasksWrapper);
 
     if (tasks.length > 3) {
-      const more = document.createElement("span");
+      const more = document.createElement("button");
 
       more.className = "calendar-day__more";
+      more.type = "button";
       more.textContent = `+ ещё ${tasks.length - 3}`;
+      more.setAttribute(
+        "aria-label",
+        `Показать все активные задачи за ${fullDate}`,
+      );
+      more.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setSelectedCalendarDate(dateKey);
+        elements.calendarSelectedDate.focus();
+      });
       cell.append(more);
     }
 
