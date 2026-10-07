@@ -3016,6 +3016,11 @@ function handleDocumentKeydown(event) {
     return;
   }
 
+  if (!elements.calendarTaskTooltip.hidden) {
+    closeCalendarTaskTooltip();
+    return;
+  }
+
   let focusTarget = null;
 
   if (activeMainTab === "tasks") {

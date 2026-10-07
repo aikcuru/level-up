@@ -1814,8 +1814,34 @@ test.describe("E08-E09 calendar task rendering", () => {
       `.calendar-day[data-date="${dates.one}"]`,
     );
     const oneTaskPill = oneCell.locator(".calendar-task");
+    const calendarTaskTooltip = page.locator("#calendar-task-tooltip");
 
     await expect(oneTaskPill).toHaveCount(1);
+    await oneTaskPill.hover();
+    await expect(oneTaskPill).toHaveAttribute(
+      "aria-describedby",
+      "calendar-task-tooltip",
+    );
+    await expect(calendarTaskTooltip).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(calendarTaskTooltip).toBeHidden();
+    await expect(oneTaskPill).not.toHaveAttribute(
+      "aria-describedby",
+      "calendar-task-tooltip",
+    );
+    await page.waitForTimeout(150);
+    await expect(calendarTaskTooltip).toBeHidden();
+
+    await page.locator(".brand").hover();
+    await oneTaskPill.hover();
+    await expect(calendarTaskTooltip).toBeVisible();
+    await page.locator("#main-tab-tasks").focus();
+    await page.keyboard.press("Enter");
+    await expect(calendarTaskTooltip).toBeHidden();
+    await page.locator(".brand").hover();
+    await page.locator("#main-tab-calendar").focus();
+    await page.keyboard.press("Enter");
+
     await oneTaskPill.click();
     await expect(emptyCell).toHaveAttribute("aria-selected", "true");
     await expect(oneCell).toHaveAttribute("aria-selected", "false");
@@ -1823,9 +1849,9 @@ test.describe("E08-E09 calendar task rendering", () => {
       "aria-describedby",
       "calendar-task-tooltip",
     );
-    await expect(page.locator("#calendar-task-tooltip")).toBeVisible();
+    await expect(calendarTaskTooltip).toBeVisible();
     await oneTaskPill.press("Escape");
-    await expect(page.locator("#calendar-task-tooltip")).toBeHidden();
+    await expect(calendarTaskTooltip).toBeHidden();
 
     await oneCell.locator(".calendar-day__button").click();
     await expect(oneCell).toHaveAttribute("aria-selected", "true");
