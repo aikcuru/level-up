@@ -1069,7 +1069,11 @@ async function bootAuthenticatedCalendar(
   return controller;
 }
 
-async function expectMainTabState(page, activeTabName) {
+async function expectMainTabState(
+  page,
+  activeTabName,
+  { focused = true } = {},
+) {
   for (const tabName of ["tasks", "calendar", "archive"]) {
     const isActive = tabName === activeTabName;
     const tab = page.locator(`#main-tab-${tabName}`);
@@ -1079,7 +1083,9 @@ async function expectMainTabState(page, activeTabName) {
     await expect(tab).toHaveAttribute("tabindex", isActive ? "0" : "-1");
 
     if (isActive) {
-      await expect(tab).toBeFocused();
+      if (focused) {
+        await expect(tab).toBeFocused();
+      }
       await expect(panel).toBeVisible();
     } else {
       await expect(panel).toBeHidden();
@@ -1513,13 +1519,24 @@ test.describe("E05-E09 required matrix", () => {
     page,
   }) => {
     const controller = createApiMockController();
+    const archivePreferences = createUiPreferences({ activeMainTab: "archive" });
 
     await installMatrixClock(page);
+    await seedUiPreferences(page, archivePreferences);
     await installApiMock(page, controller);
     await page.goto("/index.html");
     await expect(page.locator("#main-interface")).toBeVisible();
 
-    await page.locator("#main-tab-tasks").focus();
+    await page.locator(".brand").focus();
+    await expect(page.locator(".brand")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#logout-button")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#settings-button")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expectMainTabState(page, "archive");
+
+    await page.keyboard.press("ArrowRight");
     await expectMainTabState(page, "tasks");
 
     await page.keyboard.press("ArrowRight");
@@ -1536,6 +1553,28 @@ test.describe("E05-E09 required matrix", () => {
 
     await page.keyboard.press("End");
     await expectMainTabState(page, "archive");
+
+    await page.keyboard.press("Home");
+    await expectMainTabState(page, "tasks");
+    await page.keyboard.press("Tab");
+    const focusedElement = await page.evaluate(() => ({
+      id: document.activeElement?.id ?? "",
+      panelId: document.activeElement?.closest('[role="tabpanel"]')?.id ?? "",
+    }));
+
+    expect(focusedElement.panelId).toBe("main-panel-tasks");
+    expect(focusedElement.id).not.toMatch(/^main-panel-(?:calendar|archive)$/);
+
+    await page.locator("#main-tab-calendar").focus();
+    await page.keyboard.press("ArrowRight");
+    await expectMainTabState(page, "archive");
+    expect((await getStoredUiPreferences(page)).activeMainTab).toBe("archive");
+    await page.reload();
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expectMainTabState(page, "archive", { focused: false });
+
+    await page.locator("#main-tab-calendar").click();
+    await expectMainTabState(page, "calendar");
     expectNoUnexpectedRequests(controller);
   });
 
