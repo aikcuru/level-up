@@ -2829,39 +2829,56 @@ test.describe("E12 mutation error handling", () => {
     expectNoUnexpectedRequests(controller);
   });
 
-  test("E12 handles one mutation network failure without retry", async ({ page }) => {
-    const task = createSyntheticTask({
+  test("E12 keeps a create draft visible after one network failure", async ({
+    page,
+  }) => {
+    const existingTask = createSyntheticTask({
       id: "test-e12-network-001",
-      title: "E12 network task",
+      title: "E12 existing network task",
       currentDeadline: MATRIX_TODAY_KEY,
       version: 2,
       createdAt: "2026-09-10T08:00:00.000Z",
     });
     const controller = createApiMockController({
-      state: createSingleActiveTaskState(task),
+      state: createSingleActiveTaskState(existingTask),
     });
-    const pathname = `/api/v1/tasks/${task.id}/complete`;
+    const pathname = "/api/v1/tasks";
+    const draftTitle = "E12 network create draft";
 
     controller.setRouteOverride("POST", pathname, async ({ route }) => {
       await route.abort("failed");
     });
 
+    await page.setViewportSize({ width: 320, height: 720 });
     await bootAuthenticatedTasks(page, controller);
-    await getTaskCard(page, "#active-tasks-list", task.title)
-      .locator(".task-card__complete-button")
-      .click();
+    await page.locator("#task-form-toggle").click();
+    await fillSyntheticTaskDraft(page, draftTitle);
+    await page.locator("#task-form-submit").click();
 
-    await expect(page.locator("#task-form-status")).toHaveText(
+    const status = page.locator("#task-form-status");
+
+    await expect(status).toHaveText(
       "Не удалось связаться с сервером. Проверьте соединение и повторите попытку.",
     );
+    await expect(status).toHaveAttribute("role", "alert");
+    await expect(status).toBeVisible();
+    await expect(status).toBeInViewport();
+    await expect(page.locator("#task-form-panel")).toBeVisible();
+    await expect(page.locator("#task-title-input")).toHaveValue(draftTitle);
+    await expect(page.locator("#task-direction-select")).toHaveValue("Школа");
+    await expect(page.locator("#task-subject-select")).toHaveValue(
+      "test-subject-math-001",
+    );
+    await expect(page.locator("#task-difficulty-select")).toHaveValue("hard");
+    await expect(page.locator("#task-deadline-input")).toHaveValue(
+      "2026-10-05",
+    );
     await expect(
-      getTaskCard(page, "#active-tasks-list", task.title),
-    ).toBeVisible();
-    await expect(
-      getTaskCard(page, "#active-tasks-list", task.title).locator(
-        ".task-card__complete-button",
-      ),
-    ).toBeEnabled();
+      getTaskCard(page, "#active-tasks-list", draftTitle),
+    ).toHaveCount(0);
+    expect(controller.state.tasks).toHaveLength(1);
+    expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+    await page.waitForTimeout(250);
     expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
     expectNoUnexpectedRequests(controller);
   });

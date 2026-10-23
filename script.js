@@ -2872,6 +2872,10 @@ async function handleTaskSubmit(event) {
           getApiErrorMessage(error, "Не удалось сохранить задачу"),
           true,
         );
+
+        if (error instanceof ApiError && error.status === 0) {
+          elements.taskFormStatus.scrollIntoView({ block: "nearest" });
+        }
       }
 
       return;
