@@ -2764,7 +2764,9 @@ test.describe("E12 mutation error handling", () => {
     expectNoUnexpectedRequests(controller);
   });
 
-  test("E12 handles mutation 403 once without storing CSRF", async ({ page }) => {
+  test("E12 handles a generic mutation 403 without stale-CSRF styling", async ({
+    page,
+  }) => {
     const task = createSyntheticTask({
       id: "test-e12-403-001",
       title: "E12 403 task",
@@ -2783,7 +2785,7 @@ test.describe("E12 mutation error handling", () => {
         controller,
         { method: "POST", pathname },
         403,
-        "Invalid CSRF token",
+        "Origin is not allowed",
       );
     });
 
@@ -2792,9 +2794,14 @@ test.describe("E12 mutation error handling", () => {
       .locator(".task-card__complete-button")
       .click();
 
-    await expect(page.locator("#task-form-status")).toContainText(
-      "Сервер отклонил запрос",
+    const status = page.locator("#task-form-status");
+
+    await expect(status).toHaveText(
+      "Сервер отклонил запрос. Обновите страницу и повторите попытку.",
     );
+    await expect(status).toHaveAttribute("role", "alert");
+    await expect(status).toHaveClass(/\bform-status--error\b/);
+    await expect(status).not.toHaveClass(/\bform-status--stale-page\b/);
     await expect(page.locator("#main-interface")).toBeVisible();
     await expect(
       getTaskCard(page, "#active-tasks-list", task.title),
@@ -3899,6 +3906,7 @@ test.describe("E21 independent tabs and stale CSRF", () => {
     );
 
     try {
+      await page.setViewportSize({ width: 320, height: 720 });
       await installMatrixClock(page);
       await installMatrixClock(pageB);
       await installApiMock(page, controller);
@@ -3943,27 +3951,100 @@ test.describe("E21 independent tabs and stale CSRF", () => {
 
       const pageBStorageBeforeMutation = await getStoredUiPreferences(pageB);
       const task = controller.state.tasks[0];
-      const pathname = `/api/v1/tasks/${task.id}/complete`;
+      const pathname = `/api/v1/tasks/${task.id}`;
+      const attemptedTitle = "E21 stale CSRF draft";
 
       await page.locator("#main-tab-tasks").click();
-      await getTaskCard(page, "#active-tasks-list", task.title)
-        .locator(".task-card__complete-button")
-        .click();
-      await expect(page.locator("#task-form-status")).toContainText(
-        "Сервер отклонил запрос",
+      await openTaskEditor(page, task.title);
+      await page.locator("#task-title-input").fill(attemptedTitle);
+      await page.locator("#task-form-submit").click();
+
+      const status = page.locator("#task-form-status");
+
+      await expect(status).toHaveText(
+        "Страница устарела. Обновите страницу и повторите действие.",
+      );
+      await expect(status).toHaveAttribute("role", "alert");
+      await expect(status).toHaveClass(/\bform-status--stale-page\b/);
+      await expect(status).toBeVisible();
+      await expect(status).toBeInViewport();
+      for (const viewport of [
+        { width: 320, height: 720 },
+        { width: 390, height: 844 },
+        { width: 768, height: 900 },
+        { width: 1280, height: 900 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await expect(status).toBeVisible();
+        const bannerMetrics = await status.evaluate((banner) => {
+          const rect = banner.getBoundingClientRect();
+          const range = document.createRange();
+          const style = window.getComputedStyle(banner);
+          const markerStyle = window.getComputedStyle(banner, "::before");
+
+          range.selectNodeContents(banner);
+
+          return {
+            documentClientWidth: document.documentElement.clientWidth,
+            documentScrollWidth: document.documentElement.scrollWidth,
+            left: rect.left,
+            markerContent: markerStyle.content.replace(/^['"]|['"]$/g, ""),
+            markerDisplay: markerStyle.display,
+            right: rect.right,
+            textLineCount: range.getClientRects().length,
+            viewportWidth: window.innerWidth,
+            whiteSpace: style.whiteSpace,
+          };
+        });
+
+        expect(bannerMetrics.markerContent).toBe("Важно:");
+        expect(bannerMetrics.markerDisplay).toBe("inline");
+        expect(bannerMetrics.whiteSpace).not.toBe("nowrap");
+        expect(bannerMetrics.left).toBeGreaterThanOrEqual(0);
+        expect(bannerMetrics.right).toBeLessThanOrEqual(
+          bannerMetrics.viewportWidth,
+        );
+        expect(bannerMetrics.documentScrollWidth).toBeLessThanOrEqual(
+          bannerMetrics.documentClientWidth,
+        );
+
+        if (viewport.width === 320) {
+          expect(bannerMetrics.textLineCount).toBeGreaterThan(1);
+        }
+
+        if (viewport.width === 1280) {
+          expect(bannerMetrics.textLineCount).toBe(1);
+        }
+      }
+      await expect(page.locator("#task-form-panel")).toBeVisible();
+      await expect(page.locator("#task-title-input")).toHaveValue(
+        attemptedTitle,
       );
 
-      expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+      expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
       expect(controller.state.tasks[0].status).toBe("active");
       expect(controller.state.tasks[0].xpAwarded).toBe(false);
       expect(controller.state.profile.totalXp).toBe(0);
+      expect(controller.state.tasks[0].title).toBe(task.title);
       await expect(
         getTaskCard(page, "#active-tasks-list", task.title),
       ).toBeVisible();
+      await expect(
+        getTaskCard(page, "#active-tasks-list", attemptedTitle),
+      ).toHaveCount(0);
       expect(await getStoredUiPreferences(pageB)).toEqual(
         pageBStorageBeforeMutation,
       );
       await expectUiPreferencesInDom(pageB, pageBExpected);
+      await page.waitForTimeout(250);
+      expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
+
+      await page.locator("#task-title-input").fill(task.title);
+      await page.locator("#task-form-submit").click();
+      await expect(status).toHaveText("Изменений нет");
+      await expect(status).toHaveAttribute("role", "status");
+      await expect(status).not.toHaveClass(/\bform-status--stale-page\b/);
+      expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
       expectNoUnexpectedRequests(controller);
     } finally {
       await pageB.close();

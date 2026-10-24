@@ -3,6 +3,7 @@
 const XP_PER_LEVEL = 100;
 const API_BASE_PATH = "/api/v1";
 const API_REQUEST_TIMEOUT_MS = 15_000;
+const INVALID_CSRF_DETAIL = "Invalid CSRF token";
 const APP_TIME_ZONE = "Asia/Irkutsk";
 const MIN_CALENDAR_YEAR = 1;
 const MAX_CALENDAR_YEAR = 9999;
@@ -1695,6 +1696,14 @@ class ServerContractError extends Error {
   }
 }
 
+function isInvalidCsrfError(error) {
+  return (
+    error instanceof ApiError &&
+    error.status === 403 &&
+    error.data?.detail === INVALID_CSRF_DETAIL
+  );
+}
+
 function getApiErrorMessage(error, fallback) {
   if (error instanceof ServerContractError) {
     return error.message;
@@ -1710,6 +1719,10 @@ function getApiErrorMessage(error, fallback) {
 
   if (error.status === 401) {
     return "Сессия завершена. Войдите снова.";
+  }
+
+  if (isInvalidCsrfError(error)) {
+    return "Страница устарела. Обновите страницу и повторите действие.";
   }
 
   if (error.status === 403) {
@@ -2179,10 +2192,7 @@ async function completeTask(taskId) {
       } else if (error.status === 409) {
         await reloadAfterConflict();
       } else if (error.status !== 401) {
-        showTaskFormStatus(
-          getApiErrorMessage(error, "Не удалось выполнить задачу"),
-          true,
-        );
+        showTaskMutationError(error, "Не удалось выполнить задачу");
       }
 
       return false;
@@ -2231,10 +2241,7 @@ async function deleteTask(taskId) {
       } else if (error.status === 409) {
         await reloadAfterConflict();
       } else if (error.status !== 401) {
-        showTaskFormStatus(
-          getApiErrorMessage(error, "Не удалось удалить задачу"),
-          true,
-        );
+        showTaskMutationError(error, "Не удалось удалить задачу");
       }
 
       return false;
@@ -2387,6 +2394,7 @@ function hideTaskFormStatus() {
   elements.taskFormStatus.classList.remove(
     "form-status--error",
     "form-status--conflict",
+    "form-status--stale-page",
   );
   elements.taskFormStatus.setAttribute("role", "status");
 }
@@ -2394,7 +2402,7 @@ function hideTaskFormStatus() {
 function showTaskFormStatus(
   message,
   isError = false,
-  { isConflict = false } = {},
+  { isConflict = false, isStalePage = false } = {},
 ) {
   document.querySelector(".task-state-retry-button")?.remove();
   elements.taskFormStatus.textContent = message;
@@ -2404,7 +2412,31 @@ function showTaskFormStatus(
     "form-status--conflict",
     isConflict,
   );
+  elements.taskFormStatus.classList.toggle(
+    "form-status--stale-page",
+    isStalePage,
+  );
   elements.taskFormStatus.setAttribute("role", isError ? "alert" : "status");
+}
+
+function scrollTaskFormStatusIntoView() {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      elements.taskFormStatus.scrollIntoView({ block: "nearest" });
+    });
+  });
+}
+
+function showTaskMutationError(error, fallback) {
+  const isStalePage = isInvalidCsrfError(error);
+
+  showTaskFormStatus(getApiErrorMessage(error, fallback), true, {
+    isStalePage,
+  });
+
+  if (isStalePage) {
+    scrollTaskFormStatusIntoView();
+  }
 }
 
 function showAcceptedMutationRefreshFailure() {
@@ -2728,11 +2760,7 @@ async function reloadAfterConflict() {
     true,
     { isConflict: true },
   );
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      elements.taskFormStatus.scrollIntoView({ block: "nearest" });
-    });
-  });
+  scrollTaskFormStatusIntoView();
 }
 
 async function saveEditedTask(values) {
@@ -2787,10 +2815,7 @@ async function saveEditedTask(values) {
       } else if (error.status === 409) {
         await reloadAfterConflict();
       } else if (error.status !== 401) {
-        showTaskFormStatus(
-          getApiErrorMessage(error, "Не удалось сохранить изменения"),
-          true,
-        );
+        showTaskMutationError(error, "Не удалось сохранить изменения");
       }
 
       return;
@@ -2847,10 +2872,7 @@ async function handleTaskSubmit(event) {
       if (error instanceof ApiTimeoutError) {
         handleTimedOutTaskMutation();
       } else if (error.status !== 401) {
-        showTaskFormStatus(
-          getApiErrorMessage(error, "Не удалось сохранить задачу"),
-          true,
-        );
+        showTaskMutationError(error, "Не удалось сохранить задачу");
 
         if (error instanceof ApiError && error.status === 0) {
           elements.taskFormStatus.scrollIntoView({ block: "nearest" });

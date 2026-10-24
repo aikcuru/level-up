@@ -547,7 +547,8 @@ button:disabled {
   font-weight: 700;
 }
 
-.main-interface-status.form-status--conflict {
+.main-interface-status.form-status--conflict,
+.main-interface-status.form-status--stale-page {
   padding: 12px 14px;
   border: 2px solid var(--color-error);
   color: var(--color-error);
@@ -556,6 +557,14 @@ button:disabled {
   font-weight: 750;
   text-align: left;
   overflow-wrap: anywhere;
+}
+
+.main-interface-status.form-status--stale-page::before {
+  display: inline;
+  margin-right: 0.25em;
+  content: "Важно:";
+  font-size: inherit;
+  font-weight: 800;
 }
 
 .profile-card {
