@@ -1740,6 +1740,15 @@ function getApiErrorMessage(error, fallback) {
   return fallback;
 }
 
+function clearProtectedInMemoryState() {
+  appState = createEmptyState();
+  taskStateRefreshPending = false;
+  setTaskFormCreateMode({ resetForm: true });
+  setTaskFormPanelOpen(false);
+  setFiltersPanelOpen(false);
+  hideTaskFormStatus();
+}
+
 function requireReauthentication() {
   uiPreferencesReady = false;
   clearUiPreferences();
@@ -1747,6 +1756,7 @@ function requireReauthentication() {
 
   csrfToken = null;
   currentUser = null;
+  clearProtectedInMemoryState();
   setActiveMainTab(defaults.activeMainTab);
   showLogin("Сессия завершена. Войдите снова, чтобы продолжить.");
 }
@@ -3153,6 +3163,7 @@ async function handleLoginSubmit(event) {
     csrfToken = auth.csrfToken;
     currentUser = auth;
     credentialsAccepted = true;
+    clearProtectedInMemoryState();
     uiPreferencesReady = false;
     clearUiPreferences();
     const defaults = resetUiStateToDefaults();
@@ -3232,10 +3243,7 @@ async function handleLogout() {
 
     csrfToken = null;
     currentUser = null;
-    appState = createEmptyState();
-    setTaskFormCreateMode({ resetForm: true });
-    setTaskFormPanelOpen(false);
-    setFiltersPanelOpen(false);
+    clearProtectedInMemoryState();
     setActiveMainTab(defaults.activeMainTab);
     elements.loginForm.reset();
     clearLoginError();

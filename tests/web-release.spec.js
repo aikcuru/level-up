@@ -2714,7 +2714,7 @@ test.describe("E11 editing contracts", () => {
 });
 
 test.describe("E12 mutation error handling", () => {
-  test("E12 handles mutation 401 once and requires reauthentication", async ({
+  test("E12 clears a dirty edit after mutation 401 and re-login", async ({
     page,
   }) => {
     const task = createSyntheticTask({
@@ -2727,13 +2727,16 @@ test.describe("E12 mutation error handling", () => {
     const controller = createApiMockController({
       state: createSingleActiveTaskState(task),
     });
-    const pathname = `/api/v1/tasks/${task.id}/complete`;
+    const pathname = `/api/v1/tasks/${task.id}`;
+    const attemptedTitle = "E12 unsaved 401 draft";
 
-    controller.setRouteOverride("POST", pathname, async ({ route }) => {
+    controller.setRouteOverride("PATCH", pathname, async ({ route }) => {
+      controller.auth.authenticated = false;
+      controller.csrfToken = null;
       await fulfillApiError(
         route,
         controller,
-        { method: "POST", pathname },
+        { method: "PATCH", pathname },
         401,
         "Synthetic session expired",
       );
@@ -2746,21 +2749,46 @@ test.describe("E12 mutation error handling", () => {
         JSON.stringify({ version: 1, activeMainTab: "tasks" }),
       );
     });
-    await getTaskCard(page, "#active-tasks-list", task.title)
-      .locator(".task-card__complete-button")
-      .click();
+    await openTaskEditor(page, task.title);
+    await page.locator("#task-title-input").fill(attemptedTitle);
+    await page.locator("#task-form-submit").click();
 
     await expect(page.locator("#login-panel")).toBeVisible();
     await expect(page.locator("#main-interface")).toBeHidden();
     await expect(page.locator("#login-error")).toContainText(
       "Сессия завершена",
     );
-    expect(getRouteRequests(controller, "POST", pathname)).toHaveLength(1);
+    await expect(page.locator("#task-form-status")).toBeHidden();
+    await expect(page.locator("#task-form-status")).not.toHaveText(
+      "Изменения сохранены",
+    );
+    expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
     expect(
       await page.evaluate(() =>
         window.sessionStorage.getItem("level-up:ui-preferences"),
       ),
     ).toBeNull();
+
+    await page.locator("#login-input").fill(controller.credentials.login);
+    await page.locator("#password-input").fill(controller.credentials.password);
+    await page.locator("#login-submit").click();
+
+    await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(page.locator("#task-form-panel")).toBeHidden();
+    await expect(page.locator("#task-form-heading")).toHaveText("Новая задача");
+    await expect(page.locator("#task-form-context")).toBeHidden();
+    await expect(page.locator("#task-title-input")).toHaveValue("");
+    await expect(
+      getTaskCard(page, "#active-tasks-list", task.title),
+    ).toBeVisible();
+    await expect(
+      getTaskCard(page, "#active-tasks-list", attemptedTitle),
+    ).toHaveCount(0);
+    expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
+    expect(getRouteRequests(controller, "GET", "/api/v1/state")).toHaveLength(2);
+    const storageSnapshot = await getBrowserStorageSnapshot(page);
+
+    expect(JSON.stringify(storageSnapshot)).not.toContain(attemptedTitle);
     expectNoUnexpectedRequests(controller);
   });
 
@@ -3683,11 +3711,14 @@ test.describe("E19 logout, reauthentication and account isolation", () => {
   }) => {
     const controller = createApiMockController();
     const subjectValue = `subject:${controller.state.subjects[0].id}`;
+    const draftTitle = "E19 logout draft must be cleared";
 
     await installMatrixClock(page);
     await installApiMock(page, controller);
     await page.goto("/index.html");
     await expect(page.locator("#main-interface")).toBeVisible();
+    await openTaskEditor(page, controller.state.tasks[0].title);
+    await page.locator("#task-title-input").fill(draftTitle);
     await setUiPreferencesThroughControls(page, { subject: subjectValue });
     await page.evaluate(() => {
       window.sessionStorage.setItem(
@@ -3708,10 +3739,21 @@ test.describe("E19 logout, reauthentication and account isolation", () => {
     expect(snapshot.sessionStorage["test-e19-unrelated-key"]).toBe(
       "test-e19-unrelated-value",
     );
+    expect(JSON.stringify(snapshot)).not.toContain(draftTitle);
     await page.locator("#login-input").fill(controller.credentials.login);
     await page.locator("#password-input").fill(controller.credentials.password);
     await page.locator("#login-submit").click();
     await expect(page.locator("#main-interface")).toBeVisible();
+    await expect(page.locator("#task-form-panel")).toBeHidden();
+    await expect(page.locator("#task-form-heading")).toHaveText("Новая задача");
+    await expect(page.locator("#task-form-context")).toBeHidden();
+    await expect(page.locator("#task-title-input")).toHaveValue("");
+    await expect(
+      getTaskCard(page, "#active-tasks-list", controller.state.tasks[0].title),
+    ).toBeVisible();
+    await expect(
+      getTaskCard(page, "#active-tasks-list", draftTitle),
+    ).toHaveCount(0);
     const defaults = createUiPreferences({
       activeMainTab: "tasks",
       selectedDate: MATRIX_TODAY_KEY,
