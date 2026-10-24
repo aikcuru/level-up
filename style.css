@@ -741,61 +741,6 @@ progress::-moz-progress-bar {
   margin: 0;
 }
 
-.panel__title-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-}
-
-.panel__title-row h2 {
-  min-width: 0;
-}
-
-.task-list-section {
-  min-width: 0;
-  margin-top: 22px;
-  padding-top: 20px;
-  border-top: 1px solid var(--color-warm-cappuccino);
-}
-
-.task-list-section h3 {
-  min-width: 0;
-  margin: 0;
-  font-size: 1.1rem;
-}
-
-.active-list-toggle {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  place-items: center;
-  flex: 0 0 40px;
-  border: 1px solid var(--color-mocha-bean);
-  border-radius: var(--radius-small);
-  color: var(--color-espresso-shot);
-  background: var(--color-caramel-roast);
-  font-size: 1.35rem;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.active-list-toggle:hover {
-  color: var(--color-creamy-latte);
-  background: var(--color-mocha-bean);
-}
-
-.active-list-toggle:active {
-  color: var(--color-creamy-latte);
-  background: var(--color-espresso-shot);
-}
-
-.active-list-toggle:focus-visible {
-  outline: 3px solid var(--color-espresso-shot);
-  outline-offset: 3px;
-}
-
 .panel__actions {
   display: flex;
   flex: 0 1 auto;

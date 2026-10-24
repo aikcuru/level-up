@@ -173,8 +173,6 @@ const elements = {
   directionFilter: document.querySelector("#direction-filter"),
   subjectFilter: document.querySelector("#subject-filter"),
   filtersResetButton: document.querySelector("#filters-reset-button"),
-  activeListToggle: document.querySelector("#active-list-toggle"),
-  activeTasksContent: document.querySelector("#active-tasks-content"),
   activeTasksList: document.querySelector("#active-tasks-list"),
   activeTasksEmpty: document.querySelector("#active-tasks-empty"),
   completedTasksSection: document.querySelector("#completed-tasks-section"),
@@ -219,7 +217,6 @@ let mutationPending = false;
 let taskStateRefreshPending = false;
 let activeMainTab = "tasks";
 let uiPreferencesReady = false;
-let activeTasksExpanded = true;
 let editingTaskId = null;
 let editingTaskVersionAtOpen = null;
 let taskFormInitialValues = null;
@@ -2125,33 +2122,6 @@ function renderTaskList(
     : `${label[0].toUpperCase()}${label.slice(1)} задач пока нет.`;
 }
 
-function updateActiveListToggle() {
-  elements.activeListToggle.textContent = activeTasksExpanded ? "−" : "+";
-  elements.activeListToggle.setAttribute(
-    "aria-expanded",
-    String(activeTasksExpanded),
-  );
-  elements.activeListToggle.setAttribute(
-    "aria-label",
-    activeTasksExpanded
-      ? "Свернуть активные задачи"
-      : "Развернуть активные задачи",
-  );
-}
-
-function setActiveTasksExpanded(isExpanded) {
-  activeTasksExpanded = isExpanded;
-  updateActiveListToggle();
-
-  if (!elements.activeListToggle.hidden) {
-    elements.activeTasksContent.hidden = !activeTasksExpanded;
-  }
-}
-
-function toggleActiveTasks() {
-  setActiveTasksExpanded(!activeTasksExpanded);
-}
-
 function updateFiltersResetButton() {
   elements.filtersResetButton.disabled =
     elements.statusFilter.value === FILTER_ALL &&
@@ -2321,12 +2291,6 @@ function renderTaskLists() {
     todayParts,
   );
 
-  const hasVisibleActiveTasks = activeTasks.length > 0;
-
-  elements.activeListToggle.hidden = !hasVisibleActiveTasks;
-  updateActiveListToggle();
-  elements.activeTasksContent.hidden =
-    hasVisibleActiveTasks && !activeTasksExpanded;
   updateFiltersResetButton();
   renderCalendar();
 }
@@ -2598,7 +2562,6 @@ function startEditingTask(taskId) {
 
   if (editingTaskId === task.id) {
     setActiveMainTab("tasks");
-    setActiveTasksExpanded(true);
     setTaskFormPanelOpen(true);
     elements.taskTitleInput.focus();
     return true;
@@ -2627,7 +2590,6 @@ function startEditingTask(taskId) {
   elements.taskDeadlineInput.value = task.currentDeadline;
   updateDifficultyPreview();
   captureTaskFormInitialValues();
-  setActiveTasksExpanded(true);
   setTaskFormPanelOpen(true);
   elements.taskTitleInput.focus();
   return true;
@@ -2902,7 +2864,6 @@ async function handleTaskSubmit(event) {
     updateSubjectField();
     updateDifficultyPreview();
     captureTaskFormInitialValues();
-    setActiveTasksExpanded(true);
     setTaskFormPanelOpen(false);
 
     if (await refreshStateAfterAcceptedMutation()) {
@@ -3282,7 +3243,6 @@ async function initializeApp() {
   elements.taskFormCancel.addEventListener("click", () => cancelTaskEditing());
   elements.filtersToggle.addEventListener("click", toggleFiltersPanel);
   elements.filtersResetButton.addEventListener("click", resetFilters);
-  elements.activeListToggle.addEventListener("click", toggleActiveTasks);
   elements.calendarTaskTooltip.addEventListener(
     "mouseenter",
     cancelCalendarTooltipClose,

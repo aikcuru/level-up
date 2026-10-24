@@ -830,6 +830,21 @@ test.describe("smoke/auth/state", () => {
     await expect(
       page.locator("#active-tasks-list .task-card__title"),
     ).toHaveText(controller.state.tasks[0].title);
+    await expect(
+      page.getByRole("heading", { name: "Активные задачи", exact: true }),
+    ).toHaveCount(0);
+    await expect(page.locator("#active-list-toggle")).toHaveCount(0);
+    await expect(page.locator("#active-tasks-content")).toHaveCount(0);
+    await expect(
+      page.locator(
+        '[aria-controls="active-tasks-content"], [aria-labelledby="active-tasks-title"]',
+      ),
+    ).toHaveCount(0);
+    await page.locator("#filters-toggle").focus();
+    await page.keyboard.press("Tab");
+    await expect(
+      page.locator("#active-tasks-list .task-card__complete-button").first(),
+    ).toBeFocused();
     await expect(page.locator("#task-form-status")).toBeHidden();
     await expect(page.locator("#login-error")).toBeHidden();
 
@@ -845,6 +860,26 @@ test.describe("smoke/auth/state", () => {
       "GET /api/v1/state",
     ]);
     expect(controller.errors).toEqual([]);
+    expectNoUnexpectedRequests(controller);
+  });
+
+  test("renders the active empty state without obsolete collapse UI", async ({
+    page,
+  }) => {
+    const state = createMockState();
+
+    state.tasks = [];
+    const controller = createApiMockController({ authenticated: true, state });
+
+    await installApiMock(page, controller);
+    await page.goto("/index.html");
+
+    await expect(page.locator("#active-tasks-list")).toHaveCount(1);
+    await expect(page.locator("#active-tasks-empty")).toHaveText(
+      "Активных задач пока нет.",
+    );
+    await expect(page.locator("#active-tasks-empty")).toBeVisible();
+    await expect(page.locator("#active-list-toggle")).toHaveCount(0);
     expectNoUnexpectedRequests(controller);
   });
 
@@ -4191,6 +4226,7 @@ function expectDesktopWeekLayout(layout) {
 }
 
 for (const viewport of [
+  { width: 320, height: 720, layout: "mobile" },
   { width: 390, height: 844, layout: "mobile" },
   { width: 767, height: 900, layout: "mobile" },
   { width: 768, height: 900, layout: "desktop" },
