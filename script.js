@@ -2420,15 +2420,26 @@ function hideTaskFormStatus() {
   document.querySelector(".task-state-retry-button")?.remove();
   elements.taskFormStatus.textContent = "";
   elements.taskFormStatus.hidden = true;
-  elements.taskFormStatus.classList.remove("form-status--error");
+  elements.taskFormStatus.classList.remove(
+    "form-status--error",
+    "form-status--conflict",
+  );
   elements.taskFormStatus.setAttribute("role", "status");
 }
 
-function showTaskFormStatus(message, isError = false) {
+function showTaskFormStatus(
+  message,
+  isError = false,
+  { isConflict = false } = {},
+) {
   document.querySelector(".task-state-retry-button")?.remove();
   elements.taskFormStatus.textContent = message;
   elements.taskFormStatus.hidden = false;
   elements.taskFormStatus.classList.toggle("form-status--error", isError);
+  elements.taskFormStatus.classList.toggle(
+    "form-status--conflict",
+    isConflict,
+  );
   elements.taskFormStatus.setAttribute("role", isError ? "alert" : "status");
 }
 
@@ -2751,9 +2762,15 @@ async function reloadAfterConflict() {
   setTaskFormCreateMode({ resetForm: true });
   setTaskFormPanelOpen(false);
   showTaskFormStatus(
-    "Задача изменилась в другом месте. Актуальные данные загружены; откройте редактирование снова.",
+    "Конфликт изменений. Задача была изменена в другой сессии. Актуальные данные уже загружены. Откройте редактирование снова.",
     true,
+    { isConflict: true },
   );
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      elements.taskFormStatus.scrollIntoView({ block: "nearest" });
+    });
+  });
 }
 
 async function saveEditedTask(values) {

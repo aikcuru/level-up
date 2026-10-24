@@ -2631,7 +2631,7 @@ test.describe("E11 editing contracts", () => {
     await page.locator("#task-form-submit").click();
 
     await expect(page.locator("#task-form-status")).toContainText(
-      "Задача изменилась в другом месте",
+      "Конфликт изменений",
     );
     const patchRequests = getRouteRequests(controller, "PATCH", pathname);
 
@@ -2789,9 +2789,13 @@ test.describe("E12 mutation error handling", () => {
       state: createSingleActiveTaskState(task),
     });
     const pathname = `/api/v1/tasks/${task.id}`;
+    const attemptedTitle = "E12 stale conflict draft";
+    const authoritativeTitle = "E12 authoritative conflict task";
+    const conflictMessage =
+      "Конфликт изменений. Задача была изменена в другой сессии. Актуальные данные уже загружены. Откройте редактирование снова.";
 
     controller.setRouteOverride("PATCH", pathname, async ({ route }) => {
-      controller.state.tasks[0].title = "E12 authoritative conflict task";
+      controller.state.tasks[0].title = authoritativeTitle;
       controller.state.tasks[0].version += 1;
       controller.state.syncVersion += 1;
       await fulfillApiError(
@@ -2803,29 +2807,62 @@ test.describe("E12 mutation error handling", () => {
       );
     });
 
+    await page.setViewportSize({ width: 320, height: 720 });
     await bootAuthenticatedTasks(page, controller);
     const requestStartIndex = controller.requests.length;
     await openTaskEditor(page, task.title);
-    await page.locator("#task-deadline-input").fill("2026-09-20");
+    await page.locator("#task-title-input").fill(attemptedTitle);
     await page.locator("#task-form-submit").click();
 
-    await expect(page.locator("#task-form-status")).toContainText(
-      "Задача изменилась в другом месте",
+    const status = page.locator("#task-form-status");
+
+    await expect(status).toHaveText(conflictMessage);
+    await expect(status).toHaveAttribute("role", "alert");
+    await expect(status).toHaveClass(/\bform-status--conflict\b/);
+    await expect(status).toBeVisible();
+    await expect(status).toBeInViewport();
+    const bannerMetrics = await status.evaluate((banner) => {
+      const rect = banner.getBoundingClientRect();
+
+      return {
+        documentClientWidth: document.documentElement.clientWidth,
+        documentScrollWidth: document.documentElement.scrollWidth,
+        left: rect.left,
+        right: rect.right,
+        viewportWidth: window.innerWidth,
+      };
+    });
+
+    expect(bannerMetrics.left).toBeGreaterThanOrEqual(0);
+    expect(bannerMetrics.right).toBeLessThanOrEqual(
+      bannerMetrics.viewportWidth,
+    );
+    expect(bannerMetrics.documentScrollWidth).toBeLessThanOrEqual(
+      bannerMetrics.documentClientWidth,
     );
     await expect(page.locator("#task-form-panel")).toBeHidden();
     await expect(
-      getTaskCard(
-        page,
-        "#active-tasks-list",
-        "E12 authoritative conflict task",
-      ),
+      getTaskCard(page, "#active-tasks-list", authoritativeTitle),
     ).toBeVisible();
+    await expect(
+      getTaskCard(page, "#active-tasks-list", attemptedTitle),
+    ).toHaveCount(0);
+    expect(controller.state.tasks).toHaveLength(1);
+    expect(controller.state.tasks[0].title).toBe(authoritativeTitle);
     expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
     expect(
       controller.requests.slice(requestStartIndex).map(
         ({ method, pathname: requestPath }) => `${method} ${requestPath}`,
       ),
     ).toEqual([`PATCH ${pathname}`, "GET /api/v1/state"]);
+    await page.waitForTimeout(250);
+    expect(getRouteRequests(controller, "PATCH", pathname)).toHaveLength(1);
+    await expect(status).toHaveText(conflictMessage);
+    await openTaskEditor(page, authoritativeTitle);
+    await page.locator("#task-form-submit").click();
+    await expect(status).toHaveText("Изменений нет");
+    await expect(status).toHaveAttribute("role", "status");
+    await expect(status).not.toHaveClass(/\bform-status--conflict\b/);
     expectNoUnexpectedRequests(controller);
   });
 

@@ -547,6 +547,17 @@ button:disabled {
   font-weight: 700;
 }
 
+.main-interface-status.form-status--conflict {
+  padding: 12px 14px;
+  border: 2px solid var(--color-error);
+  color: var(--color-error);
+  background: var(--calendar-russian);
+  font-size: 0.92rem;
+  font-weight: 750;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
 .profile-card {
   padding: clamp(24px, 4vw, 42px);
   border-radius: var(--radius-large);
